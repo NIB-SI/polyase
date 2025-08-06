@@ -60,7 +60,8 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
     # Check for transcript IDs
     if not adata.var_names.any():
         raise ValueError("'transcript_id' not found in adata.var_names")
-    transcript_ids = adata.var_names
+    gene_ids = adata.var_names
+    transcript_ids = adata.var['transcript_id']
 
     # Check conditions
     if test_condition not in adata.obs['condition'].unique() and test_condition != "all":
@@ -148,7 +149,9 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
                 print(f"Error testing syntelog {synt_id}, allele {allele_idx}: {str(e)}")
                 continue
 
-            # Get transcript ID and parse allele info
+            # Get gene ID and parse allele info
+            gene_id = gene_ids[allele_pos]
+            # Get transcript ID
             transcript_id = transcript_ids[allele_pos]
 
             haplotype = adata.var['haplotype'].iloc[allele_indices[allele_idx]]
@@ -200,8 +203,8 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
         fdr_map = results_df.groupby('transcript_id')['FDR'].first().to_dict()
 
         # Update the FDR array
-        for i, transcript_id in enumerate(transcript_ids):
-            if transcript_id in fdr_map:
+        for i, gene_id in enumerate(gene_ids):
+            if gene_id in fdr_map:
                 fdr_pvals[i] = fdr_map[transcript_id]
 
     # Store results in the AnnData object
@@ -295,7 +298,9 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
     # Check for transcript IDs
     if not adata.var_names.any():
         raise ValueError("'transcript_id' not found in adata.var_names")
-    transcript_ids = adata.var_names
+    gene_ids = adata.var_names
+    transcript_ids = adata.var['transcript_id']
+
 
     # Check conditions
     if group_key not in adata.obs:
@@ -377,6 +382,7 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
                 continue
 
             # Get transcript ID and parse allele info
+            gene_id = gene_ids[allele_pos]
             transcript_id = transcript_ids[allele_pos]
 
             haplotype = adata.var['haplotype'].iloc[allele_indices[allele_idx]]
@@ -403,8 +409,9 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
             #for replicate in range(len(allelic_ratios[unique_conditions[0]])):
             results.append({
                     'Synt_id': synt_id,
-                    'allele': allele_num,
+                    'gene_id': gene_id,
                     'transcript_id': transcript_id,
+                    'allele': allele_num,
                     'p_value': p_value,
                     'ratio_difference': ratio_difference,
                     'n_alleles': len(allele_indices),
