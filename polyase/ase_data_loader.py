@@ -278,6 +278,7 @@ def aggregate_transcripts_to_genes(adata_tx):
 
     # Aggregate metadata efficiently using groupby
     gene_metadata_cols = [
+        'transcript_id',
         'Synt_id', 'synteny_category', 'syntenic_genes', 'haplotype',
         'CDS_length_category', 'CDS_percent_difference',
         'CDS_haplotype_with_longest_annotation'
@@ -289,7 +290,7 @@ def aggregate_transcripts_to_genes(adata_tx):
 
     for col in gene_metadata_cols:
         if col in adata_tx.var.columns:
-            # Use groupby to get first non-null value for each gene
+            # For other metadata, take the first non-null value for each gene
             gene_metadata = tx_var_valid.groupby('gene_id')[col].first()
             gene_var[col] = gene_metadata.reindex(unique_genes)
 
