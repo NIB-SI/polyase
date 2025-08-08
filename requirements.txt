@@ -17,7 +17,7 @@ iniconfig
 ipykernel
 ipython
 ipython_pygments_lexers
-isotools==0.3.4 
+isotools==0.3.4
 jedi
 jupyter_client
 jupyter_core
@@ -43,6 +43,7 @@ ptyprocess
 pure_eval
 Pygments
 pyparsing
+pyranges
 PySide6==6.8.2
 pytest
 python-dateutil

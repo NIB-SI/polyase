@@ -249,6 +249,257 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
         return results_df
 
 
+def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_condition="control", inplace=True):
+    """
+    Test if alleles of a gene have unequal expression and store results in AnnData object.
+
+    Parameters
+    -----------
+    adata : AnnData
+        AnnData object containing expression data
+    layer : str, optional
+        Layer containing count data (default: "unique_counts")
+    test_condition : str, optional
+        Variable column name containing condition for testing within (default: "control")
+    inplace : bool, optional
+        Whether to modify the input AnnData object or return a copy (default: True)
+
+    Returns
+    --------
+    AnnData or None
+        If inplace=False, returns modified copy of AnnData; otherwise returns None
+        Results are stored in:
+        - adata.uns['allelic_ratio_test']: Complete test results as DataFrame
+        - adata.var['allelic_ratio_pval']: P-values for each allele
+        - adata.var['allelic_ratio_FDR']: FDR-corrected p-values for each allele
+    pd.DataFrame
+        Results of statistical tests for each syntelog
+    """
+    import pandas as pd
+    import numpy as np
+    import re
+    from statsmodels.stats.multitest import multipletests
+    from isotools._transcriptome_stats import betabinom_lr_test
+    from anndata import AnnData
+
+    # Validate inputs
+    if not isinstance(adata, AnnData):
+        raise ValueError("Input adata must be an AnnData object")
+
+    # Check if layer exists
+    if layer not in adata.layers:
+        raise ValueError(f"Layer '{layer}' not found in AnnData object")
+
+    # Work on a copy if not inplace
+    if not inplace:
+        adata = adata.copy()
+
+    # Get counts and metadata
+    counts = adata.layers[layer].copy()  # Create a copy to avoid modifying original
+
+    # Ensure allelic ratio layer exists
+    if "allelic_ratio_unique_counts" not in adata.layers:
+        raise ValueError("Layer 'allelic_ratio_unique_counts' not found in AnnData object")
+    allelic_ratio_counts = adata.layers["allelic_ratio_unique_counts"].copy()
+
+    # Get CPM data if available
+    cpm_layer_name = layer.replace('counts', 'cpm')  # e.g., unique_counts -> unique_cpm
+    cpm_counts = None
+    if cpm_layer_name in adata.layers:
+        cpm_counts = adata.layers[cpm_layer_name].copy()
+        print(f"Using CPM data from layer: {cpm_layer_name}")
+    else:
+        print(f"CPM layer '{cpm_layer_name}' not found, CPM values will not be included")
+
+    # Check for syntelog IDs
+    if "Synt_id" not in adata.var:
+        raise ValueError("'Synt_id' not found in adata.var")
+    synt_ids = adata.var["Synt_id"]
+
+    # Check for transcript IDs
+    if not adata.var_names.any():
+        raise ValueError("'transcript_id' not found in adata.var_names")
+    gene_ids = adata.var_names
+    transcript_ids = adata.var['transcript_id']
+
+    # Check conditions
+    if test_condition not in adata.obs['condition'].unique() and test_condition != "all":
+        raise ValueError(f"Condition '{test_condition}' not found in adata.obs['condition']")
+
+    unique_synt_ids = np.unique(synt_ids)
+
+    # Prepare results dataframe
+    results = []
+
+    # Create empty arrays for storing p-values in adata.var
+    pvals = np.full(adata.n_vars, np.nan)
+    fdr_pvals = np.full(adata.n_vars, np.nan)
+    ratio_diff = np.full(adata.n_vars, np.nan)
+
+    # Create empty arrays for mean ratios per condition
+    mean_ratio_cond1 = np.full(adata.n_vars, np.nan)
+    mean_ratio_cond2 = np.full(adata.n_vars, np.nan)
+
+    # Track progress
+    total_syntelogs = len(unique_synt_ids)
+    processed = 0
+
+    # Process each syntelog
+    for synt_id in unique_synt_ids:
+        processed += 1
+        if processed % 100 == 0:
+            print(f"Processing syntelog {processed}/{total_syntelogs}")
+
+        # Find alleles (observations) belonging to this syntelog
+        allele_indices = np.where(synt_ids == synt_id)[0]
+
+        # Skip if fewer than 2 alleles found (need at least 2 for ratio testing)
+        if len(allele_indices) < 2:
+            continue
+
+        for allele_idx, allele_pos in enumerate(allele_indices):
+            allele_counts = []
+            condition_total = []
+            allelic_ratios = {}
+
+            # Get samples for this condition
+            if test_condition == "all":
+                condition_indices = np.arange(counts.shape[0])
+            else:
+                # Get samples for this condition
+                condition_indices = np.where(adata.obs['condition'] == test_condition)[0]
+
+            # Extract counts for these alleles and samples
+            condition_counts = counts[np.ix_(condition_indices, allele_indices)]
+
+            # Sum across samples to get total counts per allele for this condition
+            total_counts = np.sum(condition_counts, axis=1)
+
+            # Get allelic ratios for this condition
+            condition_ratios = allelic_ratio_counts[np.ix_(condition_indices, allele_indices)]
+
+            # Get CPM values for this condition if available
+            condition_cpm = None
+            if cpm_counts is not None:
+                condition_cpm = cpm_counts[np.ix_(condition_indices, allele_indices)]
+
+            # Append arrays for total counts
+            condition_total.append(total_counts)
+
+            # Append array for this specific allele's counts
+            allele_counts.append(condition_counts[:,allele_idx])
+
+            # Store ratios for this test condition
+            allelic_ratios = condition_ratios[:,allele_idx]
+
+            # generate balanced allele counts based on condition total counts
+            # balanced counts need to be integers for the test
+            balanced_counts = [np.round(x * 1/len(allele_indices)) for x in condition_total]
+            allele_counts.append(balanced_counts[0])
+            # add the total counts again for the balanced counts
+            condition_total.append(total_counts)
+
+            # Run the beta-binomial likelihood ratio test
+            try:
+                test_result = betabinom_lr_test(allele_counts, condition_total)
+                p_value, ratio_stats = test_result[0], test_result[1]
+                # Calculate absolute difference in mean ratios between conditions
+                ratio_difference = abs(ratio_stats[0] - ratio_stats[2])
+            except Exception as e:
+                print(f"Error testing syntelog {synt_id}, allele {allele_idx}: {str(e)}")
+                continue
+
+            # Get gene ID and parse allele info
+            gene_id = gene_ids[allele_pos]
+            # Get transcript ID
+            transcript_id = transcript_ids[allele_pos]
+
+            haplotype = adata.var['haplotype'].iloc[allele_indices[allele_idx]]
+            # Extract allele number from haplotype
+
+            try:
+                allele_match = re.search(r'hap(\d+)', haplotype)  # Capture the number
+                if allele_match:
+                    allele_num = allele_match.group(1)  # Get the captured number directly
+                else:
+                    allele_num = f"{allele_idx+1}"  # Fallback if regex fails
+                    print(f"No match found, using fallback: {allele_num}")
+            except Exception as e:
+                print(f"Error: {e}")
+                allele_num = f"{allele_idx+1}"  # Fallback if any error occurs
+
+            # Store p-value in the arrays we created
+            pvals[allele_pos] = p_value
+            ratio_diff[allele_pos] = ratio_difference
+            mean_ratio_cond1[allele_pos] = ratio_stats[0]
+            mean_ratio_cond2[allele_pos] = ratio_stats[2]
+
+            # Prepare result dictionary
+            result_dict = {
+                'Synt_id': synt_id,
+                'allele': allele_num,
+                'transcript_id': transcript_id,
+                'p_value': p_value,
+                'ratio_difference': ratio_difference,
+                'n_alleles': len(allele_indices),
+                f'ratios_{test_condition}_mean': ratio_stats[0],
+                f'ratios_rep_{test_condition}': allelic_ratios
+            }
+
+            # Add CPM values if available
+            if condition_cpm is not None:
+                # Calculate mean CPM for this allele in this condition
+                allele_cpm_values = condition_cpm[:, allele_idx]
+                mean_cpm = np.mean(allele_cpm_values)
+
+                result_dict[f'cpm_{test_condition}_mean'] = mean_cpm
+                result_dict[f'cpm_rep_{test_condition}'] = allele_cpm_values
+
+            results.append(result_dict)
+
+    # Convert results to DataFrame
+    results_df = pd.DataFrame(results)
+
+    # Multiple testing correction if we have results
+    if len(results_df) > 0:
+        # PROBLEM: p_value is nan sometimes, replace with 1 for now
+        results_df['p_value'] = results_df['p_value'].fillna(1)
+        results_df['FDR'] = multipletests(results_df['p_value'], method='fdr_bh')[1]
+        results_df = results_df.sort_values('p_value')
+
+        # Map FDR values back to the individual alleles
+        # Group by transcript_id and take the first FDR value (they should be the same for all replicates)
+        fdr_map = results_df.groupby('transcript_id')['FDR'].first().to_dict()
+
+        # Update the FDR array
+        for i, transcript_id in enumerate(transcript_ids):
+            if transcript_id in fdr_map:
+                fdr_pvals[i] = fdr_map[transcript_id]
+
+    # Store results in the AnnData object
+    adata.uns['allelic_ratio_test'] = results_df
+    adata.var['allelic_ratio_pval'] = pvals
+    adata.var['allelic_ratio_FDR'] = fdr_pvals
+    adata.var['allelic_ratio_difference'] = ratio_diff
+    adata.var[f'allelic_ratio_mean_{test_condition}'] = mean_ratio_cond1
+
+    # Group by Synt_id and take minimum FDR value and max ratio difference
+    if len(results_df) > 0:
+        grouped_results = results_df.groupby('Synt_id').agg({
+            'FDR': 'min',
+            'ratio_difference': 'max'
+        })
+        # Print summary
+        significant_results = grouped_results[(grouped_results['FDR'] < 0.005) & (grouped_results['ratio_difference'] > 0.1)]
+        print(f"Found {len(significant_results)} from {len(grouped_results)} syntelogs with at least one significantly different allele (FDR < 0.005 and ratio difference > 0.1)")
+
+    # Return AnnData object if not inplace
+    if not inplace:
+        return adata
+    else:
+        return results_df
+
+
 def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_key="condition", inplace=True):
     """
     Test if allelic ratios change between conditions and store results in AnnData object.
@@ -1065,3 +1316,462 @@ def test_isoform1_DIU_between_alleles(adata, layer="unique_counts", test_conditi
         print("No results found")
 
     return results_df
+
+
+# Add this function to your existing polyase/stats.py file
+
+def test_isoform_DIU_between_alleles_by_structure(adata, layer="unique_counts", test_condition="control",
+                                                 structure_similarity_threshold=0.8, inplace=True):
+    """
+    Test if alleles have different isoform usage using structure-based matching.
+
+    This function finds the major isoform structure for each syntelog, then compares
+    usage of transcripts with similar structures across haplotypes.
+
+    Parameters
+    -----------
+    adata : AnnData
+        AnnData object containing expression data with exon structure information
+    layer : str, optional
+        Layer containing count data (default: "unique_counts")
+    test_condition : str, optional
+        Variable column name containing condition for testing within (default: "control")
+    structure_similarity_threshold : float, optional
+        Minimum similarity score (0-1) for matching transcript structures (default: 0.8)
+    inplace : bool, optional
+        Whether to modify the input AnnData object or return a copy (default: True)
+
+    Returns
+    --------
+    pd.DataFrame
+        Results of statistical tests for each syntelog with columns:
+        - Synt_id: syntelog identifier
+        - target_structure: comma-separated exon lengths of target structure
+        - structure_group_size: number of transcripts with similar structure
+        - min_ratio_haplotype: haplotype with lowest isoform usage
+        - max_ratio_haplotype: haplotype with highest isoform usage
+        - p_value: statistical significance
+        - FDR: false discovery rate corrected p-value
+        - ratio_difference: absolute difference between min and max ratios
+
+    Notes
+    -----
+    This function requires that exon structure information has been added to the
+    AnnData object using add_exon_structure() from polyase.structure module.
+
+    The function:
+    1. Groups transcripts within each syntelog by structural similarity
+    2. Identifies the major structural group (highest expression)
+    3. Finds matching transcripts across haplotypes for this structure
+    4. Tests for differential isoform usage between haplotypes using beta-binomial test
+
+    Example
+    -------
+    >>> # First add structure information
+    >>> polyase.add_structure_from_gtf(adata, "annotations.gtf")
+    >>>
+    >>> # Then test for structure-based DIU
+    >>> results = polyase.test_isoform_DIU_between_alleles_by_structure(adata)
+    >>> significant = results[results['FDR'] < 0.05]
+    """
+    import pandas as pd
+    import numpy as np
+    from statsmodels.stats.multitest import multipletests
+    from isotools._transcriptome_stats import betabinom_lr_test
+    from anndata import AnnData
+
+    # Validate inputs
+    if not isinstance(adata, AnnData):
+        raise ValueError("Input adata must be an AnnData object")
+
+    # Check if layer exists
+    if layer not in adata.layers:
+        raise ValueError(f"Layer '{layer}' not found in AnnData object")
+
+    # Check for required structure information
+    required_structure_cols = ['exon_structure', 'n_exons']
+    missing_cols = [col for col in required_structure_cols if col not in adata.var.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required structure columns: {missing_cols}. "
+                        "Please run add_exon_structure() first.")
+
+    if 'exon_lengths' not in adata.uns:
+        raise ValueError("'exon_lengths' not found in adata.uns. Please run add_exon_structure() first.")
+
+    # Work on a copy if not inplace
+    if not inplace:
+        adata = adata.copy()
+
+    # Get counts and metadata
+    counts = adata.layers[layer].copy()
+
+    # Check for required columns
+    if "Synt_id" not in adata.var:
+        raise ValueError("'Synt_id' not found in adata.var")
+    synt_ids = adata.var["Synt_id"]
+
+    if "haplotype" not in adata.var:
+        raise ValueError("'haplotype' not found in adata.var")
+    haplotypes = adata.var["haplotype"]
+
+    # Check for transcript IDs
+    if not adata.var_names.any():
+        raise ValueError("'transcript_id' not found in adata.var_names")
+    transcript_ids = adata.var_names
+
+    # Check conditions
+    if test_condition not in adata.obs['condition'].unique() and test_condition != "all":
+        raise ValueError(f"Condition '{test_condition}' not found in adata.obs['condition']")
+
+    # Get exon lengths data
+    exon_lengths_dict = adata.uns['exon_lengths']
+
+    unique_synt_ids = np.unique(synt_ids)
+    # Remove NaN and 0 values
+    unique_synt_ids = unique_synt_ids[~pd.isna(unique_synt_ids)]
+    unique_synt_ids = unique_synt_ids[unique_synt_ids != 0]
+
+    # Prepare results dataframe
+    results = []
+
+    # Track progress
+    total_syntelogs = len(unique_synt_ids)
+    processed = 0
+
+    print(f"Processing {total_syntelogs} syntelogs for structure-based DIU analysis...")
+
+    # Process each syntelog
+    for synt_id in unique_synt_ids:
+        processed += 1
+        if processed % 100 == 0:
+            print(f"Processing syntelog {processed}/{total_syntelogs}")
+
+        # Find all transcripts belonging to this syntelog
+        synt_mask = synt_ids == synt_id
+        synt_indices = np.where(synt_mask)[0]
+
+        # Skip if no transcripts found
+        if len(synt_indices) == 0:
+            continue
+
+        # Get unique haplotypes for this syntelog
+        synt_haplotypes = haplotypes.iloc[synt_indices]
+        unique_haplotypes = synt_haplotypes.dropna().unique()
+
+        # Skip if fewer than 2 haplotypes
+        if len(unique_haplotypes) < 2:
+            continue
+
+        # Get sample indices for the test condition
+        if test_condition == "all":
+            condition_indices = np.arange(counts.shape[0])
+        else:
+            condition_indices = np.where(adata.obs['condition'] == test_condition)[0]
+
+        # Find structural groups within this syntelog
+        structure_groups = _group_transcripts_by_structure(
+            synt_indices, transcript_ids, exon_lengths_dict, structure_similarity_threshold
+        )
+
+        # Skip if no structural groups found
+        if not structure_groups:
+            continue
+
+        # Find the major structural group (most highly expressed)
+        major_structure_group = _find_major_structure_group(
+            structure_groups, synt_indices, counts, condition_indices, transcript_ids
+        )
+
+        if major_structure_group is None:
+            continue
+
+        # Find matching transcripts for this structure in each haplotype
+        haplotype_transcript_data = _find_matching_transcripts_by_haplotype(
+            major_structure_group, synt_indices, haplotypes, transcript_ids,
+            counts, condition_indices
+        )
+
+        # Skip if we don't have matching transcripts in at least 2 haplotypes
+        if len(haplotype_transcript_data) < 2:
+            continue
+
+        # Calculate average ratios for each haplotype
+        haplotype_ratios = _calculate_haplotype_ratios(haplotype_transcript_data)
+
+        # Find haplotypes with max and min ratios
+        if len(haplotype_ratios) < 2:
+            continue
+
+        sorted_haps = sorted(haplotype_ratios.keys(), key=lambda x: haplotype_ratios[x])
+        min_hap = sorted_haps[0]
+        max_hap = sorted_haps[-1]
+
+        # Skip if ratios are the same (no difference to test)
+        if haplotype_ratios[min_hap] == haplotype_ratios[max_hap]:
+            continue
+
+        # Prepare data for statistical test
+        min_hap_data = haplotype_transcript_data[min_hap]
+        max_hap_data = haplotype_transcript_data[max_hap]
+
+        allele_counts = [min_hap_data['isoform_counts'], max_hap_data['isoform_counts']]
+        condition_total = [min_hap_data['total_counts'], max_hap_data['total_counts']]
+
+        # Skip if any total counts are zero
+        if np.any([np.sum(ct) == 0 for ct in condition_total]):
+            continue
+
+        # Run the beta-binomial likelihood ratio test
+        try:
+            test_result = betabinom_lr_test(allele_counts, condition_total)
+            p_value, ratio_stats = test_result[0], test_result[1]
+
+            # Calculate absolute difference in mean ratios between haplotypes
+            ratio_difference = abs(ratio_stats[0] - ratio_stats[2]) if len(ratio_stats) >= 3 else \
+                              abs(haplotype_ratios[min_hap] - haplotype_ratios[max_hap])
+
+        except Exception as e:
+            print(f"Error testing syntelog {synt_id}: {str(e)}")
+            continue
+
+        # Get representative structure
+        representative_transcript = major_structure_group['transcripts'][0]
+        representative_structure = exon_lengths_dict.get(representative_transcript, [])
+
+        # Prepare result dictionary
+        result_dict = {
+            'Synt_id': synt_id,
+            'target_structure': ','.join(map(str, representative_structure)),
+            'structure_group_size': len(major_structure_group['transcripts']),
+            'min_ratio_haplotype': min_hap,
+            'max_ratio_haplotype': max_hap,
+            'min_ratio_transcript_id': min_hap_data['transcript_id'],
+            'max_ratio_transcript_id': max_hap_data['transcript_id'],
+            'p_value': p_value,
+            'ratio_difference': ratio_difference,
+            'n_haplotypes': len(haplotype_transcript_data),
+            f'ratio_{min_hap}_mean': haplotype_ratios[min_hap],
+            f'ratio_{max_hap}_mean': haplotype_ratios[max_hap]
+        }
+
+        # Add mean ratios for ALL haplotypes
+        for hap, ratio in haplotype_ratios.items():
+            result_dict[f'ratio_{hap}_mean'] = ratio
+
+        # Add transcript IDs for all haplotypes that have matching structure
+        for hap, data in haplotype_transcript_data.items():
+            result_dict[f'transcript_id_{hap}'] = data['transcript_id']
+
+        # Add list of all haplotypes for this syntelog
+        result_dict['all_haplotypes'] = list(haplotype_ratios.keys())
+
+        # Store results
+        results.append(result_dict)
+
+    # Convert results to DataFrame
+    results_df = pd.DataFrame(results)
+
+    # Multiple testing correction if we have results
+    if len(results_df) > 0:
+        # Handle NaN p-values
+        results_df['p_value'] = results_df['p_value'].fillna(1)
+        results_df['FDR'] = multipletests(results_df['p_value'], method='fdr_bh')[1]
+        results_df = results_df.sort_values('p_value')
+
+        # Print summary
+        significant_results = results_df[(results_df['FDR'] < 0.05) & (results_df['ratio_difference'] > 0.2)]
+        print(f"\nFound {len(significant_results)} from {len(results_df)} syntelogs with significantly different "
+              f"isoform usage between alleles (FDR < 0.05 and ratio difference > 0.2)")
+
+        # Store results in AnnData object if inplace
+        if inplace:
+            adata.uns['structure_based_isoform_diu_test'] = results_df
+    else:
+        print("No results found")
+
+    return results_df
+
+
+def _group_transcripts_by_structure(transcript_indices, transcript_ids, exon_lengths_dict,
+                                   similarity_threshold):
+    """
+    Group transcripts by structural similarity.
+    """
+    transcript_list = [transcript_ids[i] for i in transcript_indices]
+
+    if len(transcript_list) <= 1:
+        if transcript_list:
+            return [{'transcripts': transcript_list, 'representative_structure':
+                    exon_lengths_dict.get(transcript_list[0], [])}]
+        return []
+
+    groups = []
+    unassigned = transcript_list.copy()
+
+    while unassigned:
+        # Take first transcript as representative
+        representative = unassigned.pop(0)
+        rep_structure = exon_lengths_dict.get(representative, [])
+
+        current_group = [representative]
+        to_remove = []
+
+        # Find similar transcripts
+        for transcript in unassigned:
+            transcript_structure = exon_lengths_dict.get(transcript, [])
+            similarity = _calculate_structure_similarity(rep_structure, transcript_structure)
+
+            if similarity >= similarity_threshold:
+                current_group.append(transcript)
+                to_remove.append(transcript)
+
+        # Remove assigned transcripts
+        for transcript in to_remove:
+            unassigned.remove(transcript)
+
+        groups.append({
+            'transcripts': current_group,
+            'representative_structure': rep_structure
+        })
+
+    return groups
+
+
+def _calculate_structure_similarity(structure1, structure2):
+    """
+    Calculate similarity between two exon structures.
+
+    Returns a similarity score between 0 and 1, where:
+    - 1.0 means identical structures
+    - 0.0 means completely different structures
+
+    The similarity is calculated using:
+    - 30% weight for number of exons similarity
+    - 30% weight for total transcript length similarity
+    - 40% weight for individual exon length patterns
+    """
+    if len(structure1) == 0 and len(structure2) == 0:
+        return 1.0
+
+    if len(structure1) == 0 or len(structure2) == 0:
+        return 0.0
+
+    # Number of exons similarity
+    exon_count_sim = 1 - abs(len(structure1) - len(structure2)) / max(len(structure1), len(structure2))
+
+    # Total length similarity
+    total1, total2 = sum(structure1), sum(structure2)
+    if total1 == 0 and total2 == 0:
+        length_sim = 1.0
+    elif total1 == 0 or total2 == 0:
+        length_sim = 0.0
+    else:
+        length_sim = 1 - abs(total1 - total2) / max(total1, total2)
+
+    # Exact structure match (for identical number of exons)
+    structure_sim = 0.0
+    if len(structure1) == len(structure2):
+        if all(e1 == e2 for e1, e2 in zip(structure1, structure2)):
+            structure_sim = 1.0
+        else:
+            # Calculate similarity of exon lengths
+            diffs = [abs(e1 - e2) / max(e1, e2) if max(e1, e2) > 0 else 0
+                    for e1, e2 in zip(structure1, structure2)]
+            structure_sim = 1 - (sum(diffs) / len(diffs))
+
+    # Weighted combination
+    similarity = (0.3 * exon_count_sim + 0.3 * length_sim + 0.4 * structure_sim)
+    return max(0.0, min(1.0, similarity))
+
+
+def _find_major_structure_group(structure_groups, synt_indices, counts, condition_indices, transcript_ids):
+    """
+    Find the structural group with highest overall expression.
+    """
+    max_expression = 0
+    major_group = None
+
+    for group in structure_groups:
+        # Calculate total expression for this structural group
+        group_expression = 0
+        for transcript_id in group['transcripts']:
+            # Find the index of this transcript in the original transcript list
+            try:
+                transcript_global_idx = transcript_ids.get_loc(transcript_id)
+                if transcript_global_idx in synt_indices:
+                    transcript_counts = counts[np.ix_(condition_indices, [transcript_global_idx])]
+                    group_expression += np.sum(transcript_counts)
+            except (KeyError, IndexError):
+                continue
+
+        if group_expression > max_expression:
+            max_expression = group_expression
+            major_group = group
+
+    return major_group if max_expression > 0 else None
+
+
+def _find_matching_transcripts_by_haplotype(major_structure_group, synt_indices, haplotypes,
+                                           transcript_ids, counts, condition_indices):
+    """
+    Find the best matching transcript for each haplotype based on the major structure.
+    """
+    haplotype_data = {}
+
+    # Get haplotypes for transcripts in this syntelog
+    synt_haplotypes = haplotypes.iloc[synt_indices]
+    unique_haplotypes = synt_haplotypes.dropna().unique()
+
+    for hap in unique_haplotypes:
+        # Get transcript indices for this haplotype within the syntelog
+        hap_mask = synt_haplotypes == hap
+        hap_indices_local = np.where(hap_mask)[0]
+        hap_indices_global = synt_indices[hap_indices_local]
+
+        # Find the transcript with structure most similar to target
+        best_match = None
+        best_similarity = 0
+
+        for idx in hap_indices_global:
+            transcript_id = transcript_ids[idx]
+            # Check if this transcript is in the major structure group
+            if transcript_id in major_structure_group['transcripts']:
+                best_match = idx
+                best_similarity = 1.0
+                break
+
+        if best_match is not None:
+            # Get counts for this specific transcript
+            isoform_counts = counts[np.ix_(condition_indices, [best_match])][:, 0]
+
+            # Get total counts for all transcripts of this haplotype in this syntelog
+            hap_total_counts = np.sum(counts[np.ix_(condition_indices, hap_indices_global)], axis=1)
+
+            haplotype_data[hap] = {
+                'isoform_counts': isoform_counts,
+                'total_counts': hap_total_counts,
+                'transcript_id': transcript_ids[best_match],
+                'similarity_score': best_similarity
+            }
+
+    return haplotype_data
+
+
+def _calculate_haplotype_ratios(haplotype_transcript_data):
+    """
+    Calculate average ratios for each haplotype.
+    """
+    haplotype_ratios = {}
+
+    for hap, data in haplotype_transcript_data.items():
+        # Avoid division by zero
+        valid_samples = data['total_counts'] > 0
+        if np.sum(valid_samples) > 0:
+            ratios = np.zeros_like(data['total_counts'], dtype=float)
+            ratios[valid_samples] = (data['isoform_counts'][valid_samples] /
+                                   data['total_counts'][valid_samples])
+            haplotype_ratios[hap] = np.mean(ratios)
+        else:
+            haplotype_ratios[hap] = 0.0
+
+    return haplotype_ratios
