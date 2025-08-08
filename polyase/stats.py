@@ -39,7 +39,6 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
     if layer not in adata.layers:
         raise ValueError(f"Layer '{layer}' not found in AnnData object")
 
-
     # Work on a copy if not inplace
     if not inplace:
         adata = adata.copy()
@@ -51,6 +50,15 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
     if "allelic_ratio_unique_counts" not in adata.layers:
         raise ValueError("Layer 'allelic_ratio_unique_counts' not found in AnnData object")
     allelic_ratio_counts = adata.layers["allelic_ratio_unique_counts"].copy()
+
+    # Get CPM data if available
+    cpm_layer_name = layer.replace('counts', 'cpm')  # e.g., unique_counts -> unique_cpm
+    cpm_counts = None
+    if cpm_layer_name in adata.layers:
+        cpm_counts = adata.layers[cpm_layer_name].copy()
+        print(f"Using CPM data from layer: {cpm_layer_name}")
+    else:
+        print(f"CPM layer '{cpm_layer_name}' not found, CPM values will not be included")
 
     # Check for syntelog IDs
     if "Synt_id" not in adata.var:
@@ -67,14 +75,12 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
     if test_condition not in adata.obs['condition'].unique() and test_condition != "all":
         raise ValueError(f"Condition '{test_condition}' not found in adata.obs['condition']")
 
-
-
     unique_synt_ids = np.unique(synt_ids)
 
     # Prepare results dataframe
     results = []
 
-    # Create empty arrays for storing p-values in adata.obsm
+    # Create empty arrays for storing p-values in adata.var
     pvals = np.full(adata.n_vars, np.nan)
     fdr_pvals = np.full(adata.n_vars, np.nan)
     ratio_diff = np.full(adata.n_vars, np.nan)
@@ -105,7 +111,6 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
             condition_total = []
             allelic_ratios = {}
 
-
             # Get samples for this condition
             if test_condition == "all":
                 condition_indices = np.arange(counts.shape[0])
@@ -122,6 +127,11 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
             # Get allelic ratios for this condition
             condition_ratios = allelic_ratio_counts[np.ix_(condition_indices, allele_indices)]
 
+            # Get CPM values for this condition if available
+            condition_cpm = None
+            if cpm_counts is not None:
+                condition_cpm = cpm_counts[np.ix_(condition_indices, allele_indices)]
+
             # Append arrays for total counts
             condition_total.append(total_counts)
 
@@ -130,19 +140,18 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
 
             # Store ratios for this test condition
             allelic_ratios = condition_ratios[:,allele_idx]
+
             # generate balanced allele counts based on condition total counts
             # balanced counts need to be integers for the test
             balanced_counts = [np.round(x * 1/len(allele_indices)) for x in condition_total]
             allele_counts.append(balanced_counts[0])
             # add the total counts again for the balanced counts
-
             condition_total.append(total_counts)
+
             # Run the beta-binomial likelihood ratio test
             try:
                 test_result = betabinom_lr_test(allele_counts, condition_total)
                 p_value, ratio_stats = test_result[0], test_result[1]
-                # if p_value is np.nan:
-                #     print(allele_counts, condition_total)
                 # Calculate absolute difference in mean ratios between conditions
                 ratio_difference = abs(ratio_stats[0] - ratio_stats[2])
             except Exception as e:
@@ -168,32 +177,41 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
                 print(f"Error: {e}")
                 allele_num = f"{allele_idx+1}"  # Fallback if any error occurs
 
-
             # Store p-value in the arrays we created
             pvals[allele_pos] = p_value
             ratio_diff[allele_pos] = ratio_difference
             mean_ratio_cond1[allele_pos] = ratio_stats[0]
             mean_ratio_cond2[allele_pos] = ratio_stats[2]
 
-            # Store results for each replicate
-            #for replicate in range(len(allelic_ratios[unique_conditions[0]])):
-            results.append({
-                    'Synt_id': synt_id,
-                    'allele': allele_num,
-                    'transcript_id': transcript_id,
-                    'p_value': p_value,
-                    'ratio_difference': ratio_difference,
-                    'n_alleles': len(allele_indices),
-                    f'ratios_{test_condition}_mean': ratio_stats[0],
-                    f'ratios_rep_{test_condition}': allelic_ratios
-                })
+            # Prepare result dictionary
+            result_dict = {
+                'Synt_id': synt_id,
+                'allele': allele_num,
+                'transcript_id': transcript_id,
+                'p_value': p_value,
+                'ratio_difference': ratio_difference,
+                'n_alleles': len(allele_indices),
+                f'ratios_{test_condition}_mean': ratio_stats[0],
+                f'ratios_rep_{test_condition}': allelic_ratios
+            }
+
+            # Add CPM values if available
+            if condition_cpm is not None:
+                # Calculate mean CPM for this allele in this condition
+                allele_cpm_values = condition_cpm[:, allele_idx]
+                mean_cpm = np.mean(allele_cpm_values)
+
+                result_dict[f'cpm_{test_condition}_mean'] = mean_cpm
+                result_dict[f'cpm_rep_{test_condition}'] = allele_cpm_values
+
+            results.append(result_dict)
 
     # Convert results to DataFrame
     results_df = pd.DataFrame(results)
 
     # Multiple testing correction if we have results
     if len(results_df) > 0:
-        # PROBLEM: p_vale is nan sometimes, replace with 1 for now
+        # PROBLEM: p_value is nan sometimes, replace with 1 for now
         results_df['p_value'] = results_df['p_value'].fillna(1)
         results_df['FDR'] = multipletests(results_df['p_value'], method='fdr_bh')[1]
         results_df = results_df.sort_values('p_value')
@@ -203,8 +221,8 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
         fdr_map = results_df.groupby('transcript_id')['FDR'].first().to_dict()
 
         # Update the FDR array
-        for i, gene_id in enumerate(gene_ids):
-            if gene_id in fdr_map:
+        for i, transcript_id in enumerate(transcript_ids):
+            if transcript_id in fdr_map:
                 fdr_pvals[i] = fdr_map[transcript_id]
 
     # Store results in the AnnData object
@@ -213,24 +231,22 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
     adata.var['allelic_ratio_FDR'] = fdr_pvals
     adata.var['allelic_ratio_difference'] = ratio_diff
     adata.var[f'allelic_ratio_mean_{test_condition}'] = mean_ratio_cond1
-    adata.var[f'allelic_ratio_mean_{test_condition}'] = mean_ratio_cond2
 
-    # Group by Synt_id and take mininum FDR value and max ratio difference
-    grouped_results = results_df.groupby('Synt_id').min("FDR")
-    grouped_results= results_df.groupby('Synt_id').agg({
-    'FDR': 'min',
-    'ratio_difference': 'max'  # Assuming this is the correct column name
+    # Group by Synt_id and take minimum FDR value and max ratio difference
+    if len(results_df) > 0:
+        grouped_results = results_df.groupby('Synt_id').agg({
+            'FDR': 'min',
+            'ratio_difference': 'max'
         })
-    # Print summary
-    significant_results = grouped_results[(grouped_results['FDR'] < 0.005) & (grouped_results['ratio_difference'] > 0.1)]
-    print(f"Found {len(significant_results)} from {len(grouped_results)} syntelogs with at least one significantly different allele (FDR < 0.005 and ratio difference > 0.1)")
+        # Print summary
+        significant_results = grouped_results[(grouped_results['FDR'] < 0.005) & (grouped_results['ratio_difference'] > 0.1)]
+        print(f"Found {len(significant_results)} from {len(grouped_results)} syntelogs with at least one significantly different allele (FDR < 0.005 and ratio difference > 0.1)")
 
     # Return AnnData object if not inplace
     if not inplace:
         return adata
     else:
         return results_df
-
 
 
 def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_key="condition", inplace=True):
@@ -274,7 +290,7 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
     if layer not in adata.layers:
         raise ValueError(f"Layer '{layer}' not found in AnnData object")
 
-    # Check if group_key exists in var
+    # Check if group_key exists in obs
     if group_key not in adata.obs:
         raise ValueError(f"Group key '{group_key}' not found in adata.obs")
 
@@ -290,6 +306,15 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
         raise ValueError("Layer 'allelic_ratio_unique_counts' not found in AnnData object")
     allelic_ratio_counts = adata.layers["allelic_ratio_unique_counts"].copy()
 
+    # Get CPM data if available
+    cpm_layer_name = layer.replace('counts', 'cpm')  # e.g., unique_counts -> unique_cpm
+    cpm_counts = None
+    if cpm_layer_name in adata.layers:
+        cpm_counts = adata.layers[cpm_layer_name].copy()
+        print(f"Using CPM data from layer: {cpm_layer_name}")
+    else:
+        print(f"CPM layer '{cpm_layer_name}' not found, CPM values will not be included")
+
     # Check for syntelog IDs
     if "Synt_id" not in adata.var:
         raise ValueError("'Synt_id' not found in adata.var")
@@ -300,7 +325,6 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
         raise ValueError("'transcript_id' not found in adata.var_names")
     gene_ids = adata.var_names
     transcript_ids = adata.var['transcript_id']
-
 
     # Check conditions
     if group_key not in adata.obs:
@@ -317,7 +341,7 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
     # Prepare results dataframe
     results = []
 
-    # Create empty arrays for storing p-values in adata.obsm
+    # Create empty arrays for storing p-values in adata.var
     pvals = np.full(adata.n_vars, np.nan)
     fdr_pvals = np.full(adata.n_vars, np.nan)
     ratio_diff = np.full(adata.n_vars, np.nan)
@@ -347,6 +371,7 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
             allele_counts = []
             condition_total = []
             allelic_ratios = {}
+            cpm_values = {}
 
             for condition_idx, condition in enumerate(unique_conditions):
                 # Get samples for this condition
@@ -361,12 +386,17 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
                 # Get allelic ratios for this condition
                 condition_ratios = allelic_ratio_counts[np.ix_(condition_indices, allele_indices)]
 
+                # Get CPM values for this condition if available
+                if cpm_counts is not None:
+                    condition_cpm = cpm_counts[np.ix_(condition_indices, allele_indices)]
+                    cpm_values[condition] = condition_cpm[:, allele_idx]
+
                 # Append arrays for total counts
                 condition_total.append(total_counts)
 
                 # Append array for this specific allele's counts
                 allele_counts.append(condition_counts[:,allele_idx])
-                #print(condition_ratios[allele_idx])
+
                 # Store ratios for this condition
                 allelic_ratios[condition] = condition_ratios[:,allele_idx]
 
@@ -391,7 +421,6 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
                 allele_match = re.search(r'hap(\d+)', haplotype)  # Capture the number
                 if allele_match:
                     allele_num = allele_match.group(1)  # Get the captured number directly
-
                 else:
                     allele_num = f"{allele_idx+1}"  # Fallback if regex fails
                     print(f"No match found, using fallback: {allele_num}")
@@ -405,28 +434,37 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
             mean_ratio_cond1[allele_pos] = ratio_stats[0]
             mean_ratio_cond2[allele_pos] = ratio_stats[2]
 
-            # Store results for each replicate
-            #for replicate in range(len(allelic_ratios[unique_conditions[0]])):
-            results.append({
-                    'Synt_id': synt_id,
-                    'gene_id': gene_id,
-                    'transcript_id': transcript_id,
-                    'allele': allele_num,
-                    'p_value': p_value,
-                    'ratio_difference': ratio_difference,
-                    'n_alleles': len(allele_indices),
-                    f'ratios_{unique_conditions[0]}_mean': ratio_stats[0],
-                    f'ratios_rep_{unique_conditions[0]}': allelic_ratios[unique_conditions[0]],
-                    f'ratios_{unique_conditions[1]}_mean': ratio_stats[2],
-                    f'ratios_rep_{unique_conditions[1]}': allelic_ratios[unique_conditions[1]]
-                })
+            # Prepare result dictionary
+            result_dict = {
+                'Synt_id': synt_id,
+                'gene_id': gene_id,
+                'transcript_id': transcript_id,
+                'allele': allele_num,
+                'p_value': p_value,
+                'ratio_difference': ratio_difference,
+                'n_alleles': len(allele_indices),
+                f'ratios_{unique_conditions[0]}_mean': ratio_stats[0],
+                f'ratios_rep_{unique_conditions[0]}': allelic_ratios[unique_conditions[0]],
+                f'ratios_{unique_conditions[1]}_mean': ratio_stats[2],
+                f'ratios_rep_{unique_conditions[1]}': allelic_ratios[unique_conditions[1]]
+            }
+
+            # Add CPM values if available
+            if cpm_counts is not None:
+                for condition in unique_conditions:
+                    if condition in cpm_values:
+                        mean_cpm = np.mean(cpm_values[condition])
+                        result_dict[f'cpm_{condition}_mean'] = mean_cpm
+                        result_dict[f'cpm_rep_{condition}'] = cpm_values[condition]
+
+            results.append(result_dict)
 
     # Convert results to DataFrame
     results_df = pd.DataFrame(results)
 
     # Multiple testing correction if we have results
     if len(results_df) > 0:
-        # PROBLEM: p_vale is nan sometimes, replace with 1 for now
+        # PROBLEM: p_value is nan sometimes, replace with 1 for now
         results_df['p_value'] = results_df['p_value'].fillna(1)
         results_df['FDR'] = multipletests(results_df['p_value'], method='fdr_bh')[1]
         results_df = results_df.sort_values('p_value')
@@ -448,19 +486,18 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
     adata.var[f'allelic_ratio_mean_{unique_conditions[0]}'] = mean_ratio_cond1
     adata.var[f'allelic_ratio_mean_{unique_conditions[1]}'] = mean_ratio_cond2
 
-    # Group by Synt_id and take mininum FDR value
-    grouped_results = results_df.groupby('Synt_id').min("FDR")
-    # Print summary
-    significant_results = grouped_results[(grouped_results['FDR'] < 0.05)]
-    print(f"Found {len(significant_results)} from {len(grouped_results)} syntelogs with at least one significantly different allelic ratio (FDR < 0.05)")
+    # Group by Synt_id and take minimum FDR value
+    if len(results_df) > 0:
+        grouped_results = results_df.groupby('Synt_id').min("FDR")
+        # Print summary
+        significant_results = grouped_results[(grouped_results['FDR'] < 0.05)]
+        print(f"Found {len(significant_results)} from {len(grouped_results)} syntelogs with at least one significantly different allelic ratio (FDR < 0.05)")
 
     # Return AnnData object if not inplace
     if not inplace:
         return adata
     else:
         return results_df
-
-
 
 def get_top_differential_syntelogs(results_df, n=5, sort_by='p_value', fdr_threshold=0.05, ratio_threshold=0.1):
     """
@@ -568,6 +605,9 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
     if not inplace:
         adata = adata.copy()
 
+    no_counts_isoform = 0
+
+
     # Get counts and metadata
     counts = adata.layers[layer].copy()  # Create a copy to avoid modifying original
     gene_ids = adata.var[gene_id_key]
@@ -584,6 +624,7 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
     # Calculate isoform ratios for each gene
     print("Calculating isoform ratios...")
     isoform_ratios = np.zeros_like(counts, dtype=float)
+
 
     for gene_id in unique_gene_ids:
         # Find isoforms (variables) belonging to this gene
@@ -663,6 +704,13 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
                 isoform_ratios_per_condition[condition] = condition_ratios
 
             # Run the beta-binomial likelihood ratio test
+            # if isoform counts or gene total counts are 0, skip this isoform
+            isoform_counts = np.array(isoform_counts)
+            gene_total_counts = np.array(gene_total_counts)
+            if np.any(isoform_counts == 0) or np.any(gene_total_counts == 0):
+                no_counts_isoform = no_counts_isoform + 1
+                # print(f"Skipping gene {gene_id}, isoform {isoform_idx + 1} due to zero counts")
+                continue
             try:
                 test_result = betabinom_lr_test(isoform_counts, gene_total_counts)
                 p_value, ratio_stats = test_result[0], test_result[1]
@@ -732,14 +780,13 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
     # Print summary
     significant_results = grouped_results[grouped_results['FDR'] < 0.05]
     print(f"Found {len(significant_results)} from {len(grouped_results)} genes with at least one significantly different isoform usage (FDR < 0.05)")
+    print(f"Skipped {no_counts_isoform} isoforms due to zero counts")
 
     # Return AnnData object if not inplace
     if not inplace:
         return adata
     else:
         return results_df
-
-
 def test_isoform1_DIU_between_alleles(adata, layer="unique_counts", test_condition="control", inplace=True):
     """
     Test if alleles have different isoform usage and store results in AnnData object.
@@ -1008,8 +1055,8 @@ def test_isoform1_DIU_between_alleles(adata, layer="unique_counts", test_conditi
         results_df = results_df.sort_values('p_value')
 
         # Print summary
-        significant_results = results_df[(results_df['FDR'] < 0.05) & (results_df['ratio_difference'] > 0.1)]
-        print(f"Found {len(significant_results)} from {len(results_df)} syntelogs with significantly different isoform usage between alleles (FDR < 0.05 and ratio difference > 0.1)")
+        significant_results = results_df[(results_df['FDR'] < 0.05) & (results_df['ratio_difference'] > 0.2)]
+        print(f"Found {len(significant_results)} from {len(results_df)} syntelogs with significantly different isoform usage between alleles (FDR < 0.05 and ratio difference > 0.2)")
 
         # Store results in AnnData object if inplace
         if inplace:
