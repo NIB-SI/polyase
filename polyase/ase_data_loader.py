@@ -76,8 +76,13 @@ def _load_sample_counts(sample_id, condition, isoform_counts_dir, quant_dir, fil
             em_df = pd.read_csv(quant_file_path, delimiter="\t")
 
             if 'tname' in em_df.columns and 'num_reads' in em_df.columns:
+                print("Oarfish quant.sf format detected")
                 em_df = em_df.set_index('tname')
                 result['em_counts'] = em_df['num_reads']
+            elif 'Name' in em_df.columns and 'NumReads' in em_df.columns:
+                print("Salmon quant.sf format detected")
+                em_df = em_df.set_index('Name')
+                result['em_counts'] = em_df['NumReads']
             else:
                 print(f"Warning: Expected columns not found in {quant_file_path}")
         except Exception as e:
