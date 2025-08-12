@@ -15,3 +15,4 @@ htmlcov/
 env/
 venv/
 ENV/
+.notebooks/long_readRNA_seq_isoform_counts_allele_desiree.ipynb
