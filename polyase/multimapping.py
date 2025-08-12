@@ -140,10 +140,11 @@ def calculate_multi_ratios(adata, unique_layer='unique_counts', multi_layer='amb
     return calculator.calculate_ratios(unique_layer=unique_layer, multi_layer=multi_layer)
 
 
-def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer='ambiguous_counts', inplace=True):
+def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer='ambiguous_counts',
+                               gene_grouping_column='gene_id', inplace=True):
     """
     Calculate multimapping ratios for each individual allele/transcript.
-    This provides transcript-level uncertainty of assignment.
+    For transcripts from the same gene, assigns the maximum ratio among all transcripts in that gene.
 
     Parameters:
     -----------
@@ -153,6 +154,8 @@ def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer
         Layer containing unique counts to use for ratio calculations
     multi_layer : str, optional (default: 'ambiguous_counts')
         Layer containing multimapping counts to use for ratio calculations
+    gene_grouping_column : str, optional (default: 'gene_id')
+        Column in adata.var to group transcripts by (e.g., 'Synt_id', 'gene_id')
     inplace : bool, optional (default: True)
         Whether to modify the input AnnData object or return a copy
 
@@ -162,6 +165,7 @@ def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer
         Updated AnnData object with per-allele multimapping ratio added to var
     """
     import numpy as np
+    import pandas as pd
 
     if adata is None:
         raise ValueError("No AnnData object provided")
@@ -173,9 +177,12 @@ def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer
     # Get counts from specified layers
     if multi_layer not in adata.layers:
         raise ValueError(f"Layer '{multi_layer}' not found")
-
     if unique_layer not in adata.layers:
         raise ValueError(f"Layer '{unique_layer}' not found")
+
+    # Check if gene grouping column exists
+    if gene_grouping_column not in adata.var.columns:
+        raise ValueError(f"Gene grouping column '{gene_grouping_column}' not found in adata.var")
 
     # Get counts for each transcript/allele
     unique_counts = adata.layers[unique_layer]
@@ -185,13 +192,39 @@ def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer
     unique_totals = np.sum(unique_counts, axis=0)
     multi_totals = np.sum(multi_counts, axis=0)
 
-    # Calculate per-allele multimapping ratios
+    # Calculate per-transcript multimapping ratios first
     total_counts = unique_totals + multi_totals
-    per_allele_ratios = np.zeros(len(total_counts), dtype=float)
+    per_transcript_ratios = np.zeros(len(total_counts), dtype=float)
 
     # Avoid division by zero
     non_zero_mask = total_counts > 0
-    per_allele_ratios[non_zero_mask] = multi_totals[non_zero_mask] / total_counts[non_zero_mask]
+    per_transcript_ratios[non_zero_mask] = multi_totals[non_zero_mask] / total_counts[non_zero_mask]
+
+    # Now assign gene-level ratios (maximum among transcripts in each gene)
+    gene_ids = adata.var[gene_grouping_column]
+    per_allele_ratios = np.zeros(len(per_transcript_ratios), dtype=float)
+
+    # Process each unique gene
+    unique_genes = gene_ids.unique()
+
+    for gene_id in unique_genes:
+        # Skip NaN or zero gene IDs
+        if pd.isna(gene_id) or gene_id == 0:
+            # For transcripts without gene assignment, use their individual ratios
+            gene_mask = pd.isna(gene_ids) | (gene_ids == 0)
+            per_allele_ratios[gene_mask] = per_transcript_ratios[gene_mask]
+            continue
+
+        # Get indices of transcripts belonging to this gene
+        gene_mask = gene_ids == gene_id
+        gene_transcript_indices = np.where(gene_mask)[0]
+
+        # Find the maximum multimapping ratio among transcripts in this gene
+        gene_ratios = per_transcript_ratios[gene_transcript_indices]
+        max_ratio = np.max(gene_ratios)
+
+        # Assign the maximum ratio to all transcripts in this gene
+        per_allele_ratios[gene_transcript_indices] = max_ratio
 
     # Add to var
     adata.var['multimapping_ratio_per_allele'] = per_allele_ratios
