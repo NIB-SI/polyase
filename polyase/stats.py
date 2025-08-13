@@ -46,10 +46,13 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
     # Get counts and metadata
     counts = adata.layers[layer].copy()  # Create a copy to avoid modifying original
 
-    # Ensure allelic ratio layer exists
-    if "allelic_ratio_unique_counts" not in adata.layers:
-        raise ValueError("Layer 'allelic_ratio_unique_counts' not found in AnnData object")
-    allelic_ratio_counts = adata.layers["allelic_ratio_unique_counts"].copy()
+    # Select the right layer for allelic ratios for plotting
+    if layer == "unique_counts":
+        allelic_ratio_counts = adata.layers["allelic_ratio_unique_counts"].copy()
+    elif layer == "em_counts":
+        allelic_ratio_counts = adata.layers["allelic_ratio_em_counts"].copy()
+    else:
+        raise ValueError("Layer must be either 'allelic_ratio_unique_counts' or 'allelic_ratio_em_counts'")
 
     # Get CPM data if available
     cpm_layer_name = layer.replace('counts', 'cpm')  # e.g., unique_counts -> unique_cpm
@@ -297,10 +300,13 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
     # Get counts and metadata
     counts = adata.layers[layer].copy()  # Create a copy to avoid modifying original
 
-    # Ensure allelic ratio layer exists
-    if "allelic_ratio_unique_counts" not in adata.layers:
-        raise ValueError("Layer 'allelic_ratio_unique_counts' not found in AnnData object")
-    allelic_ratio_counts = adata.layers["allelic_ratio_unique_counts"].copy()
+    # Get allelic ratio counts
+    if layer == "unique_counts":
+        allelic_ratio_counts = adata.layers["allelic_ratio_unique_counts"].copy()
+    elif layer == "em_counts":
+        allelic_ratio_counts = adata.layers["allelic_ratio_em_counts"].copy()
+    else:
+        raise ValueError("Layer must be either 'allelic_ratio_unique_counts' or 'allelic_ratio_em_counts'")
 
     # Get CPM data if available
     cpm_layer_name = layer.replace('counts', 'cpm')  # e.g., unique_counts -> unique_cpm
