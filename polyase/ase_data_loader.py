@@ -394,7 +394,7 @@ def aggregate_transcripts_to_genes(adata_tx):
     gene_metadata_cols = [
         'transcript_id', 'Synt_id', 'synteny_category', 'syntenic_genes',
         'haplotype', 'CDS_length_category', 'CDS_percent_difference',
-        'CDS_haplotype_with_longest_annotation'
+        'CDS_haplotype_with_longest_annotation', 'functional_annotation'
     ]
 
     valid_tx_mask = gene_ids.notna()
