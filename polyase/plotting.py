@@ -241,15 +241,21 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
         mean_prefix = 'ratios'
         y_label = 'Expression Ratio'
         default_ylim = (0, 1)
+        default_yticks = (0, 0.25, 0.5, 1)
     else:  # plot_type == 'cpm'
         value_prefix = 'cpm'
         mean_prefix = 'cpm'
         y_label = 'CPM'
         default_ylim = None  # Auto-scale for CPM
+        default_yticks = None
 
     # Set y-limits
     if ylim is None:
         ylim = default_ylim
+
+    if default_yticks is None:
+        yticks = default_yticks
+
 
     # Get the condition names from appropriate columns
     condition_columns = [col for col in results_df.columns if col.startswith(f'{value_prefix}_rep_')]
@@ -318,8 +324,10 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
             id_vars.append('FDR')
         if 'gene_id' in synt_data.columns:
             id_vars.append('gene_id')
+        if 'functional_annotation' in synt_data.columns:
+            id_vars.append('functional_annotation')
 
-        synt_data_melted = pd.melt(
+        synt_data_melted = pd.melt(         
             synt_data_exploded,
             id_vars=id_vars,
             value_vars=condition_columns,
@@ -368,7 +376,7 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
                     )
 
         # Set title and labels
-        fdr_text = f", FDR = {fdr:.2e}" if not np.isnan(fdr) else ""
+        fdr_text = f",FDR={fdr:.2e}" if not np.isnan(fdr) else ""
         p_value_text = f", p = {p_value:.2e}"
 
         # Determine if this syntelog has a significant difference
@@ -380,15 +388,28 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
 
         # Set title color based on significance
         title_color = sig_color if is_significant else 'black'
+        if 'functional_annotation' in synt_data_melted.columns:
+            function_annotation = synt_data_melted['functional_annotation'][0]
+            if function_annotation is not None:
+                function_annotation_text = function_annotation[:20] # shorten in case of long descriptions
+            else: 
+                function_annotation_text = "NA"
+        else:
+            function_annotation = None
+            function_annotation_text = None
 
+        transcript_id = synt_data_melted['transcript_id'][0]
         # Add title with optional stats and color based on significance
-        ax.set_title(f"{synt_id}{fdr_text}", color=title_color)
+        ax.set_title(f"{transcript_id}\n{function_annotation_text}\n{fdr_text}", color=title_color)
         ax.set_xlabel('Allele')
         ax.set_ylabel(y_label)
 
         # Set y-limits
         if ylim is not None:
             ax.set_ylim(ylim)
+
+        # if yticks is not None:
+        #     ax.set_yticks(yticks)
 
         # Adjust legend
         if ax.get_legend():
