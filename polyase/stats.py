@@ -322,6 +322,12 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
         raise ValueError("'Synt_id' not found in adata.var")
     synt_ids = adata.var["Synt_id"]
 
+    if "functional_annotation" in adata.var:
+        functional_annotations = adata.var["functional_annotation"]
+    else:
+        functional_annotations = None
+        print("No functional annotations found in adata.var, skipping functional annotation processing.")
+
     # Check for transcript IDs
     if not adata.var_names.any():
         raise ValueError("'transcript_id' not found in adata.var_names")
@@ -418,7 +424,8 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
             # Get gene ID and parse allele info
             gene_id = gene_ids[allele_pos]
             # Get transcript ID
-            transcript_id = transcript_ids[allele_pos]
+            transcript_id = transcript_ids.iloc[allele_pos]
+            functional_annotation = functional_annotations.iloc[allele_pos]
 
             haplotype = adata.var['haplotype'].iloc[allele_indices[allele_idx]]
             # Extract allele number from haplotype
@@ -444,6 +451,7 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
             result_dict = {
                 'Synt_id': synt_id,
                 'allele': allele_num,
+                'functional_annotation': functional_annotation,
                 'transcript_id': transcript_id,
                 'p_value': p_value,
                 'ratio_difference': ratio_difference,
@@ -577,6 +585,15 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
         raise ValueError("'Synt_id' not found in adata.var")
     synt_ids = adata.var["Synt_id"]
 
+    if "functional_annotation" in adata.var:
+        functional_annotations = adata.var["functional_annotation"]
+    else:
+        functional_annotations = None
+        print("No functional annotations found in adata.var, skipping functional annotation processing.")
+
+    if "gene_id" in adata.var:
+        gene_ids = adata.var['gene_id']
+
     # Check for transcript IDs
     if not adata.var_names.any():
         raise ValueError("'transcript_id' not found in adata.var_names")
@@ -671,6 +688,7 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
             # Get transcript ID and parse allele info
             gene_id = gene_ids[allele_pos]
             transcript_id = transcript_ids[allele_pos]
+            functional_annotation = functional_annotations.iloc[allele_pos]
 
             haplotype = adata.var['haplotype'].iloc[allele_indices[allele_idx]]
             # Extract allele number from haplotype
@@ -696,6 +714,7 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
                 'Synt_id': synt_id,
                 'gene_id': gene_id,
                 'transcript_id': transcript_id,
+                'functional_annotation': functional_annotation,
                 'allele': allele_num,
                 'p_value': p_value,
                 'ratio_difference': ratio_difference,
@@ -1397,6 +1416,7 @@ def test_isoform_DIU_between_alleles_with_major_minor_plotting(
 
     counts = adata.layers[layer]
     synt_ids = adata.var["Synt_id"]
+    functional_annotation = adata.var["functional_annotation"]
     haplotypes = adata.var["haplotype"]
     transcript_ids = adata.var_names
     exon_lengths_dict = adata.uns['exon_lengths']
