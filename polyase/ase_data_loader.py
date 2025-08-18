@@ -92,7 +92,6 @@ def _load_sample_counts(sample_id, condition, isoform_counts_dir, quant_dir, fil
 
     return result
 
-
 def load_ase_data(
     var_obs_file,
     isoform_counts_dir,
@@ -231,8 +230,7 @@ def load_ase_data(
     missing_genes = isoform_genes - var_obs_genes
 
     print(f"Found {len(matching_genes)} genes with var_obs annotations")
-    print(f"Found {len(missing_genes)} genes without var_obs annotations (will be filled with NaN)\n e.g {list(missing_genes)[:3]}\
-           {list(missing_genes)[-3:]}.... Could be that they are non-coding or novel..")
+    print(f"Found {len(missing_genes)} genes without var_obs annotations (will be filled with NaN)")
 
     # Create a mapping for efficient lookup
     gene_to_var_obs = var_obs.to_dict('index')
@@ -251,18 +249,59 @@ def load_ase_data(
             if pd.notna(gene_id) else default_value
         )
 
+    # Handle Synt_id assignment for transcripts without var_obs annotations
+    print("Assigning Synt_id values...")
+
+    if 'Synt_id' in isoform_var.columns:
+        # Find the maximum existing Synt_id to avoid conflicts
+        existing_synt_ids = isoform_var['Synt_id'].dropna()
+        if len(existing_synt_ids) > 0:
+            # Handle both numeric and non-numeric Synt_ids
+            numeric_synt_ids = pd.to_numeric(existing_synt_ids, errors='coerce').dropna()
+            if len(numeric_synt_ids) > 0:
+                max_synt_id = int(numeric_synt_ids.max())
+            else:
+                max_synt_id = 0
+        else:
+            max_synt_id = 0
+
+        # Assign unique Synt_ids to transcripts without them
+        missing_synt_mask = isoform_var['Synt_id'].isna()
+        n_missing = missing_synt_mask.sum()
+
+        if n_missing > 0:
+            # Assign sequential IDs starting from max_synt_id + 1
+            new_synt_ids = range(max_synt_id + 1, max_synt_id + 1 + n_missing)
+            isoform_var.loc[missing_synt_mask, 'Synt_id'] = list(new_synt_ids)
+
+            print(f"Assigned new Synt_id values {max_synt_id + 1} to {max_synt_id + n_missing} for {n_missing} transcripts")
+    else:
+        # If Synt_id column doesn't exist, create it with unique IDs for all transcripts
+        print("Creating Synt_id column with unique IDs for all transcripts")
+        isoform_var['Synt_id'] = range(1, len(isoform_var) + 1)
+
     # Keep ALL transcripts (no filtering based on var_obs matches)
     print(f"Keeping all {len(isoform_var)} transcripts from expression data")
 
     # Report statistics
     transcripts_with_gene_annotation = isoform_var['gene_id'].notna().sum()
     transcripts_with_var_obs = isoform_var['gene_id'].isin(var_obs.index).sum()
+    transcripts_with_existing_synt_id = 0
+    transcripts_with_new_synt_id = 0
+
+    if 'Synt_id' in isoform_var.columns:
+        # Count how many had existing vs new Synt_ids
+        if len(var_obs_genes) > 0:
+            transcripts_with_existing_synt_id = isoform_var['gene_id'].isin(var_obs.index).sum()
+            transcripts_with_new_synt_id = len(isoform_var) - transcripts_with_existing_synt_id
 
     print(f"Statistics:")
     print(f"  - Total transcripts: {len(isoform_var)}")
     print(f"  - Transcripts with gene_id annotation: {transcripts_with_gene_annotation}")
     print(f"  - Transcripts with var_obs data: {transcripts_with_var_obs}")
     print(f"  - Transcripts with NaN var_obs data: {len(isoform_var) - transcripts_with_var_obs}")
+    print(f"  - Transcripts with existing Synt_id: {transcripts_with_existing_synt_id}")
+    print(f"  - Transcripts with newly assigned Synt_id: {transcripts_with_new_synt_id}")
 
     # Reindex count matrices efficiently
     print("Aligning count matrices...")
