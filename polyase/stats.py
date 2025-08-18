@@ -825,7 +825,6 @@ def get_top_differential_syntelogs(results_df, n=5, sort_by='p_value', fdr_thres
     # Return filtered dataframe
     return results_df[results_df['Synt_id'].isin(top_syntelogs)]
 
-
 def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key="condition", gene_id_key="gene_id", inplace=True):
     """
     Test if isoform usage ratios change between conditions and store results in AnnData object.
@@ -853,6 +852,8 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
         - adata.var['isoform_usage_FDR']: FDR-corrected p-values for each isoform
     pd.DataFrame
         Results of statistical tests for each gene
+    pd.DataFrame
+        Plotting results table with one row per replicate, condition, isoform ratio, and transcript
     """
     import pandas as pd
     import numpy as np
@@ -883,7 +884,6 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
 
     no_counts_isoform = 0
 
-
     # Get counts and metadata
     counts = adata.layers[layer].copy()  # Create a copy to avoid modifying original
     gene_ids = adata.var[gene_id_key]
@@ -900,7 +900,6 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
     # Calculate isoform ratios for each gene
     print("Calculating isoform ratios...")
     isoform_ratios = np.zeros_like(counts, dtype=float)
-
 
     for gene_id in unique_gene_ids:
         # Find isoforms (variables) belonging to this gene
@@ -923,6 +922,7 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
 
     # Prepare results dataframe
     results = []
+    plotting_results = []  # New list for plotting table
 
     # Create empty arrays for storing p-values in adata.var
     pvals = np.full(adata.n_vars, np.nan)
@@ -1020,8 +1020,29 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
                 f'ratios_rep_{unique_conditions[1]}': isoform_ratios_per_condition[unique_conditions[1]]
             })
 
+            # Create plotting results table - one row per replicate, condition, ratio, transcript
+            for condition in unique_conditions:
+                condition_indices = np.where(conditions == condition)[0]
+                sample_names = adata.obs_names[condition_indices]
+                ratios = isoform_ratios_per_condition[condition]
+
+                for rep_idx, (sample_name, ratio_value) in enumerate(zip(sample_names, ratios)):
+                    plotting_results.append({
+                        'gene_id': gene_id,
+                        'transcript_id': transcript_id,
+                        'isoform_number': isoform_idx + 1,
+                        'condition': condition,
+                        'replicate': rep_idx + 1,
+                        'sample_name': sample_name,
+                        'isoform_ratio': ratio_value,
+                        'p_value': p_value,
+                        'ratio_difference': ratio_difference,
+                        'n_isoforms': len(isoform_indices)
+                    })
+
     # Convert results to DataFrame
     results_df = pd.DataFrame(results)
+    plotting_df = pd.DataFrame(plotting_results)
 
     # Multiple testing correction if we have results
     if len(results_df) > 0:
@@ -1037,6 +1058,9 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
         for i, transcript_id in enumerate(transcript_ids):
             if transcript_id in fdr_map:
                 fdr_pvals[i] = fdr_map[transcript_id]
+
+        # Add FDR to plotting dataframe
+        plotting_df['FDR'] = plotting_df['transcript_id'].map(fdr_map).fillna(1.0)
 
     # Store results in the AnnData object
     adata.uns['isoform_usage_test'] = results_df
@@ -1057,12 +1081,15 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
     significant_results = grouped_results[grouped_results['FDR'] < 0.05]
     print(f"Found {len(significant_results)} from {len(grouped_results)} genes with at least one significantly different isoform usage (FDR < 0.05)")
     print(f"Skipped {no_counts_isoform} isoforms due to zero counts")
+    print(f"Created plotting table with {len(plotting_df)} rows (one per replicate, condition, isoform ratio, and transcript)")
 
     # Return AnnData object if not inplace
     if not inplace:
-        return adata
+        return adata, results_df, plotting_df
     else:
-        return results_df
+        return results_df, plotting_df
+
+
 def test_isoform1_DIU_between_alleles(adata, layer="unique_counts", test_condition="control", inplace=True):
     """
     Test if alleles have different isoform usage and store results in AnnData object.
