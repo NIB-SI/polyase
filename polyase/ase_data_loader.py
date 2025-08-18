@@ -92,6 +92,7 @@ def _load_sample_counts(sample_id, condition, isoform_counts_dir, quant_dir, fil
 
     return result
 
+
 def load_ase_data(
     var_obs_file,
     isoform_counts_dir,
@@ -131,7 +132,9 @@ def load_ase_data(
     Returns
     --------
     anndata.AnnData
-        AnnData object containing the processed isoform-level data with EM counts and CPM layers
+        AnnData object containing the processed isoform-level data with EM counts and CPM layers.
+        Includes all transcripts from expression matrix and tx2gene mapping, with NaN values
+        for var_obs data when genes are not found in var_obs_file.
     """
     print("Loading metadata files...")
 
@@ -205,7 +208,7 @@ def load_ase_data(
     unique_counts = pd.DataFrame(unique_data) if unique_data else pd.DataFrame()
     em_counts = pd.DataFrame(em_data) if em_data else pd.DataFrame()
 
-    # Get all transcript IDs
+    # Get all transcript IDs from expression matrices
     all_transcript_ids = set()
     for df in [ambig_counts, unique_counts, em_counts]:
         if not df.empty:
@@ -213,40 +216,53 @@ def load_ase_data(
 
     print("Creating isoform metadata...")
 
-    # Create isoform metadata efficiently
+    # Create isoform metadata for ALL transcripts found in expression data
     isoform_var = pd.DataFrame(index=list(all_transcript_ids))
     isoform_var['transcript_id'] = isoform_var.index
     isoform_var['gene_id'] = isoform_var['transcript_id'].map(tx_to_gene_dict)
     isoform_var['feature_type'] = 'transcript'
 
-    # Match var_obs data based on gene_id
+    # Add var_obs data for ALL transcripts, using NaN for missing genes
+    print(f"Adding var_obs annotations for {len(all_transcript_ids)} transcripts...")
+
     var_obs_genes = set(var_obs.index)
     isoform_genes = set(isoform_var['gene_id'].dropna())
     matching_genes = var_obs_genes.intersection(isoform_genes)
-    print(f"Found {len(matching_genes)} genes with matching annotations")
+    missing_genes = isoform_genes - var_obs_genes
 
-    if len(matching_genes) > 0:
-        # Create a mapping for efficient lookup
-        gene_to_var_obs = var_obs.to_dict('index')
+    print(f"Found {len(matching_genes)} genes with var_obs annotations")
+    print(f"Found {len(missing_genes)} genes without var_obs annotations (will be filled with NaN)\n e.g {list(missing_genes)[:3]}\
+           {list(missing_genes)[-3:]}.... Could be that they are non-coding or novel..")
 
-        # Vectorized approach to add var_obs data
-        for col in var_obs.columns:
-            col_dtype = var_obs[col].dtype
-            if col_dtype == 'object' or pd.api.types.is_string_dtype(col_dtype):
-                default_value = None
-            else:
-                default_value = np.nan
+    # Create a mapping for efficient lookup
+    gene_to_var_obs = var_obs.to_dict('index')
 
-            # Vectorized mapping using gene_id
-            isoform_var[col] = isoform_var['gene_id'].map(
-                lambda gene_id: gene_to_var_obs.get(gene_id, {}).get(col, default_value)
-                if pd.notna(gene_id) else default_value
-            )
+    # Add all var_obs columns to isoform_var, filling with NaN for missing genes
+    for col in var_obs.columns:
+        col_dtype = var_obs[col].dtype
+        if col_dtype == 'object' or pd.api.types.is_string_dtype(col_dtype):
+            default_value = None
+        else:
+            default_value = np.nan
 
-    # Filter to keep only transcripts with gene matches
-    transcripts_with_gene_match = isoform_var['gene_id'].isin(var_obs.index)
-    isoform_var = isoform_var[transcripts_with_gene_match]
-    print(f"Keeping {len(isoform_var)} transcripts with gene matches")
+        # Vectorized mapping using gene_id - keeps ALL transcripts
+        isoform_var[col] = isoform_var['gene_id'].map(
+            lambda gene_id: gene_to_var_obs.get(gene_id, {}).get(col, default_value)
+            if pd.notna(gene_id) else default_value
+        )
+
+    # Keep ALL transcripts (no filtering based on var_obs matches)
+    print(f"Keeping all {len(isoform_var)} transcripts from expression data")
+
+    # Report statistics
+    transcripts_with_gene_annotation = isoform_var['gene_id'].notna().sum()
+    transcripts_with_var_obs = isoform_var['gene_id'].isin(var_obs.index).sum()
+
+    print(f"Statistics:")
+    print(f"  - Total transcripts: {len(isoform_var)}")
+    print(f"  - Transcripts with gene_id annotation: {transcripts_with_gene_annotation}")
+    print(f"  - Transcripts with var_obs data: {transcripts_with_var_obs}")
+    print(f"  - Transcripts with NaN var_obs data: {len(isoform_var) - transcripts_with_var_obs}")
 
     # Reindex count matrices efficiently
     print("Aligning count matrices...")
@@ -271,7 +287,6 @@ def load_ase_data(
     em_counts.fillna(fillna, inplace=True)
 
     print("Creating AnnData object...")
-
 
     main_counts = unique_counts[successful_samples]
     print("Using unique counts as main expression matrix (X)")
@@ -328,7 +343,6 @@ def load_ase_data(
 
     print("Data loading completed!")
     return adata
-
 
 def aggregate_transcripts_to_genes(adata_tx):
     """
