@@ -139,12 +139,12 @@ def calculate_multi_ratios(adata, unique_layer='unique_counts', multi_layer='amb
     calculator = MultimappingRatioCalculator(adata)
     return calculator.calculate_ratios(unique_layer=unique_layer, multi_layer=multi_layer)
 
-
 def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer='ambiguous_counts',
-                               gene_grouping_column='gene_id', inplace=True):
+                               gene_grouping_column='gene_id', inplace=True, count_scaling=True,
+                               min_counts_threshold=10, scaling_method='weighted_average'):
     """
     Calculate multimapping ratios for each individual allele/transcript.
-    For transcripts from the same gene, assigns the maximum ratio among all transcripts in that gene.
+    For transcripts from the same gene, assigns ratios based on count-weighted calculations.
 
     Parameters:
     -----------
@@ -158,6 +158,15 @@ def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer
         Column in adata.var to group transcripts by (e.g., 'Synt_id', 'gene_id')
     inplace : bool, optional (default: True)
         Whether to modify the input AnnData object or return a copy
+    count_scaling : bool, optional (default: True)
+        Whether to scale multimapping ratios by count abundance
+    min_counts_threshold : int, optional (default: 10)
+        Minimum total counts threshold - transcripts below this get reduced weight
+    scaling_method : str, optional (default: 'weighted_average')
+        Method for combining ratios within genes:
+        - 'weighted_average': Weight by total counts
+        - 'max_weighted': Take max ratio but weight by counts
+        - 'abundance_filtered': Only consider transcripts above threshold
 
     Returns:
     --------
@@ -191,26 +200,21 @@ def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer
     # Sum across all samples for each transcript
     unique_totals = np.sum(unique_counts, axis=0)
     multi_totals = np.sum(multi_counts, axis=0)
-
-    # Calculate per-transcript multimapping ratios first
     total_counts = unique_totals + multi_totals
-    per_transcript_ratios = np.zeros(len(total_counts), dtype=float)
 
-    # Avoid division by zero
+    # Calculate per-transcript multimapping ratios
+    per_transcript_ratios = np.zeros(len(total_counts), dtype=float)
     non_zero_mask = total_counts > 0
     per_transcript_ratios[non_zero_mask] = multi_totals[non_zero_mask] / total_counts[non_zero_mask]
 
-    # Now assign gene-level ratios (maximum among transcripts in each gene)
-    gene_ids = adata.var[gene_grouping_column]
+    # Initialize per-allele ratios
     per_allele_ratios = np.zeros(len(per_transcript_ratios), dtype=float)
-
-    # Process each unique gene
+    gene_ids = adata.var[gene_grouping_column]
     unique_genes = gene_ids.unique()
 
     for gene_id in unique_genes:
         # Skip NaN or zero gene IDs
         if pd.isna(gene_id) or gene_id == 0:
-            # For transcripts without gene assignment, use their individual ratios
             gene_mask = pd.isna(gene_ids) | (gene_ids == 0)
             per_allele_ratios[gene_mask] = per_transcript_ratios[gene_mask]
             continue
@@ -219,14 +223,72 @@ def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer
         gene_mask = gene_ids == gene_id
         gene_transcript_indices = np.where(gene_mask)[0]
 
-        # Find the maximum multimapping ratio among transcripts in this gene
+        # Get ratios and counts for transcripts in this gene
         gene_ratios = per_transcript_ratios[gene_transcript_indices]
-        max_ratio = np.max(gene_ratios)
+        gene_counts = total_counts[gene_transcript_indices]
 
-        # Assign the maximum ratio to all transcripts in this gene
-        per_allele_ratios[gene_transcript_indices] = max_ratio
+        if not count_scaling:
+            # Original behavior: use maximum ratio
+            max_ratio = np.max(gene_ratios)
+            per_allele_ratios[gene_transcript_indices] = max_ratio
+        else:
+            # Apply count-based scaling
+            if scaling_method == 'weighted_average':
+                # Calculate weighted average ratio, giving more weight to highly expressed transcripts
+                if np.sum(gene_counts) > 0:
+                    weights = gene_counts / np.sum(gene_counts)
+                    weighted_ratio = np.sum(gene_ratios * weights)
+                else:
+                    weighted_ratio = 0
+                per_allele_ratios[gene_transcript_indices] = weighted_ratio
 
-    # Add to var
-    adata.var['multimapping_ratio_per_allele'] = per_allele_ratios
+            elif scaling_method == 'max_weighted':
+                # Take maximum ratio but reduce it if it comes from low-count transcripts
+                max_idx = np.argmax(gene_ratios)
+                max_ratio = gene_ratios[max_idx]
+                max_counts = gene_counts[max_idx]
+
+                # Apply scaling factor based on count abundance
+                if max_counts < min_counts_threshold:
+                    # Reduce the ratio for low-count transcripts
+                    scaling_factor = max_counts / min_counts_threshold
+                    scaled_ratio = max_ratio * scaling_factor
+                else:
+                    scaled_ratio = max_ratio
+
+                per_allele_ratios[gene_transcript_indices] = scaled_ratio
+
+            elif scaling_method == 'abundance_filtered':
+                # Only consider transcripts above the count threshold
+                high_count_mask = gene_counts >= min_counts_threshold
+
+                if np.any(high_count_mask):
+                    # Use maximum ratio among high-count transcripts
+                    filtered_ratios = gene_ratios[high_count_mask]
+                    max_ratio = np.max(filtered_ratios)
+                else:
+                    # If no transcripts meet threshold, use weighted average
+                    if np.sum(gene_counts) > 0:
+                        weights = gene_counts / np.sum(gene_counts)
+                        max_ratio = np.sum(gene_ratios * weights)
+                    else:
+                        max_ratio = 0
+
+                per_allele_ratios[gene_transcript_indices] = max_ratio
+
+            else:
+                raise ValueError(f"Unknown scaling_method: {scaling_method}")
+
+    # Add to var with descriptive column name
+    if count_scaling:
+        column_name = f'multimapping_ratio_per_allele_{scaling_method}'
+    else:
+        column_name = 'multimapping_ratio_per_allele'
+
+    adata.var[column_name] = per_allele_ratios
+
+    # Also store some diagnostic information
+    adata.var['transcript_total_counts'] = total_counts
+    adata.var['transcript_multimapping_ratio'] = per_transcript_ratios
 
     return adata
