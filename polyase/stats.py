@@ -890,6 +890,17 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
     transcript_ids = adata.var_names
     conditions = adata.obs[group_key].values
 
+    # Calculate library sizes (total counts per sample) for CPM calculation
+    library_sizes = np.sum(counts, axis=1)
+
+    # Calculate CPM (Counts Per Million)
+    cpm = np.zeros_like(counts, dtype=float)
+    for i, lib_size in enumerate(library_sizes):
+        if lib_size > 0:
+            cpm[i, :] = (counts[i, :] / lib_size) * 1e6
+        else:
+            cpm[i, :] = 0
+
     # Get unique conditions and gene IDs
     unique_conditions = np.unique(conditions)
     if len(unique_conditions) != 2:
@@ -1026,7 +1037,13 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
                 sample_names = adata.obs_names[condition_indices]
                 ratios = isoform_ratios_per_condition[condition]
 
-                for rep_idx, (sample_name, ratio_value) in enumerate(zip(sample_names, ratios)):
+                # Get CPM values for this isoform in this condition
+                isoform_cpm_values = cpm[condition_indices, isoform_pos]
+
+                # Get raw counts for this isoform in this condition
+                isoform_count_values = counts[condition_indices, isoform_pos]
+
+                for rep_idx, (sample_name, ratio_value, cpm_value, count_value) in enumerate(zip(sample_names, ratios, isoform_cpm_values, isoform_count_values)):
                     plotting_results.append({
                         'gene_id': gene_id,
                         'transcript_id': transcript_id,
@@ -1035,6 +1052,8 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
                         'replicate': rep_idx + 1,
                         'sample_name': sample_name,
                         'isoform_ratio': ratio_value,
+                        'unique_counts': count_value,  # Raw counts
+                        'unique_counts_cpm': cpm_value,  # CPM values
                         'p_value': p_value,
                         'ratio_difference': ratio_difference,
                         'n_isoforms': len(isoform_indices)
@@ -1088,8 +1107,6 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
         return adata, results_df, plotting_df
     else:
         return results_df, plotting_df
-
-
 def test_isoform1_DIU_between_alleles(adata, layer="unique_counts", test_condition="control", inplace=True):
     """
     Test if alleles have different isoform usage and store results in AnnData object.
