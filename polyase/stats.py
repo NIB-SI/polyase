@@ -1107,6 +1107,8 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
         return adata, results_df, plotting_df
     else:
         return results_df, plotting_df
+
+
 def test_isoform1_DIU_between_alleles(adata, layer="unique_counts", test_condition="control", inplace=True):
     """
     Test if alleles have different isoform usage and store results in AnnData object.
