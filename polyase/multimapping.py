@@ -173,8 +173,6 @@ def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer
     adata : AnnData
         Updated AnnData object with per-allele multimapping ratio added to var
     """
-    import numpy as np
-    import pandas as pd
 
     if adata is None:
         raise ValueError("No AnnData object provided")
