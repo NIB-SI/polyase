@@ -1,6 +1,7 @@
 anndata
 array_api_compat
 asttokens
+bluepy
 cached-property
 colorama
 comm
