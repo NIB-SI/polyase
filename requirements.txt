@@ -54,6 +54,7 @@ scipy==1.15.2
 seaborn
 shiboken6==6.8.2
 six
+sphinx
 stack_data
 statsmodels
 tomli
