@@ -15,11 +15,21 @@ documentation for details.
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: Getting Started:
 
-intro
-examples
-polyase
+   intro
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Examples:
+
+   examples
+
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference:
+
+   modules
 
 Indices and tables
 ==================
