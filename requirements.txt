@@ -55,6 +55,7 @@ seaborn
 shiboken6==6.8.2
 six
 sphinx
+sphinx_rtd_theme
 stack_data
 statsmodels
 tomli
