@@ -1,3 +1,8 @@
+"""
+stats.py
+====================================
+The stats module of polyase project
+"""
 def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_condition="control", inplace=True):
     """
     Test if alleles of a gene have unequal expression and store results in AnnData object.
