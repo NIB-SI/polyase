@@ -1,7 +1,6 @@
 anndata
 array_api_compat
 asttokens
-bluepy
 cached-property
 colorama
 comm
@@ -54,8 +53,6 @@ scipy==1.15.2
 seaborn
 shiboken6==6.8.2
 six
-sphinx
-sphinx_rtd_theme
 stack_data
 statsmodels
 tomli
