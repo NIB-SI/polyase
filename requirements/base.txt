@@ -2,6 +2,7 @@ anndata
 array_api_compat
 asttokens
 cached-property
+cmake
 colorama
 comm
 contourpy
@@ -37,6 +38,8 @@ pickleshare
 pillow
 platformdirs
 pluggy
+plotly==5.24.1
+polars
 prompt_toolkit
 psutil
 ptyprocess
@@ -49,6 +52,7 @@ pytest
 python-dateutil
 pytz
 pyzmq
+RNApysoforms
 scipy==1.15.2
 seaborn
 shiboken6==6.8.2
