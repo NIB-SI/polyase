@@ -4,6 +4,207 @@ import pandas as pd
 import numpy as np
 from typing import Optional, List, Union, Tuple
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import numpy as np
+from typing import Optional, List, Union, Tuple
+
+def plot_allelic_ratios(
+    adata,
+    synteny_category: str,
+    sample: Union[str, List[str]] = "all",
+    multimapping_threshold: float = 0.5,
+    ratio_type: str = "both",
+    bins: int = 30,
+    figsize: Tuple[int, int] = (12, 6),
+    kde: bool = True,
+    save_path: Optional[str] = None
+    ):
+    """
+    Plot allelic ratios for transcripts in a specific synteny category.
+    Filters out Synt_ids where all allelic ratios are 0 for a given sample.
+
+    Parameters
+    ----------
+    adata : AnnData
+        AnnData object containing transcript data
+    synteny_category : str
+        Synteny category to filter for
+    sample : str or List[str], default="all"
+        Sample(s) to plot. If list, will plot each sample separately
+    multimapping_threshold : float, default=0.5
+        Threshold for high multimapping ratio
+    ratio_type : str, default="both"
+        Type of ratio to plot: "unique", "em", or "both"
+    bins : int, default=30
+        Number of bins for the histogram
+    figsize : tuple, default=(12, 6)
+        Figure size (width, height) in inches
+    kde : bool, default=True
+        Whether to show KDE curve on histogram
+    save_path : str, optional
+        Path to save the plot. If None, plot is shown but not saved
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The figure object containing the plot(s)
+    """
+    # Validate parameters
+    valid_ratio_types = ["unique", "em", "both"]
+    if ratio_type not in valid_ratio_types:
+        raise ValueError(f"ratio_type must be one of {valid_ratio_types}")
+
+    # Make sample always a list for consistent processing
+    if isinstance(sample, str):
+        samples = [sample]
+    else:
+        samples = sample
+
+    # Ensure all samples exist in var
+    for s in samples:
+        if s not in adata.var and s != "all":
+            raise ValueError(f"Sample '{s}' not found in adata.var")
+
+    # Filter the data for the specific synteny category
+    filtered_data = adata[:,adata.var['synteny_category'] == synteny_category].copy()
+
+    if len(filtered_data) == 0:
+        print(f"No data found for synteny category: {synteny_category}")
+        return None
+
+    # Add a tag for high multimapping ratio
+    filtered_data.var['ambiguous_counts'] = np.where(
+    filtered_data.var['multimapping_ratio'] > multimapping_threshold,
+    'high',
+    'low')
+
+    # Create figure with appropriate number of subplots
+    if ratio_type == "both":
+        n_ratio_plots = 2
+    else:
+        n_ratio_plots = 1
+
+    n_sample_plots = len(samples)
+    total_plots = n_ratio_plots * n_sample_plots
+
+    # Calculate grid dimensions
+    if total_plots <= 2:
+        n_rows, n_cols = 1, total_plots
+    else:
+        n_cols = min(3, total_plots)
+        n_rows = (total_plots + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False)
+    axes = axes.flatten()
+
+    plot_idx = 0
+
+    # Create plots for each sample and ratio type
+    for sample_idx, current_sample in enumerate(samples):
+        # Extract data for current sample
+        if current_sample != "all":
+            sample_indices = np.where(filtered_data.obs_names == current_sample)[0]
+        else:
+            sample_indices = np.arange(filtered_data.shape[0])
+
+        # Determine which ratio types to plot
+        ratio_types_to_plot = ["unique", "em"] if ratio_type == "both" else [ratio_type]
+
+        for rt in ratio_types_to_plot:
+            if rt == "unique":
+                layer_name = "allelic_ratio_unique_counts"
+                title_suffix = "Unique Counts"
+            else:
+                layer_name = "allelic_ratio_em_counts"
+                title_suffix = "EM Counts"
+
+            # Check if layer exists
+            if layer_name not in filtered_data.layers:
+                print(f"Warning: Layer '{layer_name}' not found, skipping {title_suffix}")
+                continue
+
+            # Extract allelic ratios for the current sample and layer
+            allelic_ratios = filtered_data.layers[layer_name][sample_indices]
+
+            # Filter out Synt_ids where all ratios are 0 for this sample
+            valid_synt_mask = []
+            synt_ids = filtered_data.var['Synt_id'].values
+            unique_synt_ids = np.unique(synt_ids)
+
+            for synt_id in unique_synt_ids:
+                # Get indices for this Synt_id
+                synt_mask = synt_ids == synt_id
+                synt_indices = np.where(synt_mask)[0]
+
+                # Get ratios for this Synt_id and sample
+                synt_ratios = allelic_ratios[:, synt_indices]
+
+                # Check if all ratios for this Synt_id are 0 (excluding NaN)
+                synt_ratios_clean = synt_ratios[~np.isnan(synt_ratios)]
+                if len(synt_ratios_clean) > 0 and not np.all(synt_ratios_clean == 0):
+                    # This Synt_id has non-zero ratios, keep it
+                    valid_synt_mask.extend([True] * np.sum(synt_mask))
+                else:
+                    # This Synt_id has all zero ratios, exclude it
+                    valid_synt_mask.extend([False] * np.sum(synt_mask))
+                    print(f"Excluding Synt_id {synt_id} for sample {current_sample} ({rt}): all ratios are 0")
+
+            valid_synt_mask = np.array(valid_synt_mask)
+
+            # Apply the mask to filter data
+            if not np.any(valid_synt_mask):
+                print(f"No valid Synt_ids for sample {current_sample}, ratio type {rt}")
+                continue
+
+            filtered_ratios = allelic_ratios[:, valid_synt_mask]
+            filtered_ambiguous = filtered_data.var['ambiguous_counts'].values[valid_synt_mask]
+
+            # Create DataFrame for plotting
+            plot_data = pd.DataFrame({
+                'allelic_ratio': filtered_ratios.flatten(order='F'),
+                'ambiguous_counts': np.repeat(filtered_ambiguous, len(sample_indices))
+            })
+
+            # Drop NaN values
+            plot_data = plot_data.dropna()
+
+            if len(plot_data) == 0:
+                print(f"No valid data for sample {current_sample}, ratio type {rt}")
+                continue
+
+            # Plot histogram
+            sns.histplot(
+                data=plot_data,
+                x='allelic_ratio',
+                hue='ambiguous_counts',
+                kde=kde,
+                bins=bins,
+                palette={'low':'green', 'high':'grey'},
+                ax=axes[plot_idx]
+            )
+
+            axes[plot_idx].set_title(f"{title_suffix} Allelic Ratio ({current_sample})")
+            axes[plot_idx].set_xlabel('Allelic Ratio')
+            axes[plot_idx].set_ylabel('Count')
+            axes[plot_idx].grid(True, linestyle='--', alpha=0.7)
+            axes[plot_idx].set_xticks([0, 0.25, 0.5, 0.75, 1])
+
+            plot_idx += 1
+
+    # Remove any empty subplots
+    for i in range(plot_idx, len(axes)):
+        fig.delaxes(axes[i])
+
+    plt.tight_layout()
+
+    # Save the plot if a path is provided
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+
+    return fig
+
 def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=None, jitter=0.2, alpha=0.7,
                                    ylim=None, sort_by='p_value', output_file=None, sig_threshold=0.05,
                                    difference_threshold=0.05, sig_color='red', plot_type='ratios'):
