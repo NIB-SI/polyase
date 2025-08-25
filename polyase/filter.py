@@ -289,4 +289,36 @@ def filter_low_expressed_genes(
         keep_groups = avg_expr >= avg_threshold
 
     # Get group IDs to keep
-    keep_group_ids = keep_groups[keep_groups].
+    keep_group_ids = keep_groups[keep_groups].index.tolist()
+
+    # Store dropped IDs for reference
+    dropped_group_ids = list(set(group_mapping.unique()) - set(keep_group_ids))
+
+    # Filter the AnnData object
+    if filter_axis == 0:  # Filter rows
+        keep_indices = group_mapping.isin(keep_group_ids)
+    else:  # Filter columns
+        keep_indices = group_mapping.isin(keep_group_ids)
+
+    if verbose:
+        print(f"Filtered out {len(dropped_group_ids)} groups")
+        print(f"Kept {keep_indices.sum()} / {len(keep_indices)} items")
+
+    if copy:
+        if filter_axis == 0:
+            filtered_adata = adata[keep_indices].copy()
+        else:
+            filtered_adata = adata[:, keep_indices].copy()
+    else:
+        # Filter in place
+        if filter_axis == 0:
+            adata._inplace_subset_obs(keep_indices)
+        else:
+            adata._inplace_subset_var(keep_indices)
+        filtered_adata = adata
+
+    if return_dropped:
+        return filtered_adata, dropped_group_ids
+
+    return filtered_adata
+
