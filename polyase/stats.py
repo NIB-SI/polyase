@@ -330,7 +330,7 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
     if "functional_annotation" in adata.var:
         functional_annotations = adata.var["functional_annotation"]
     else:
-        functional_annotations = None
+        functional_annotations = "Missing annotation"
         print("No functional annotations found in adata.var, skipping functional annotation processing.")
 
     # Check for transcript IDs
@@ -593,7 +593,7 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
     if "functional_annotation" in adata.var:
         functional_annotations = adata.var["functional_annotation"]
     else:
-        functional_annotations = None
+        functional_annotations = "Missing annotation"
         print("No functional annotations found in adata.var, skipping functional annotation processing.")
 
     if "gene_id" in adata.var:
@@ -995,16 +995,42 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
                                            where=condition_gene_totals!=0)
                 isoform_ratios_per_condition[condition] = condition_ratios
 
-            # Run the beta-binomial likelihood ratio test
-            # if isoform counts or gene total counts are 0, skip this isoform
-            isoform_counts = np.array(isoform_counts)
-            gene_total_counts = np.array(gene_total_counts)
-            if np.any(isoform_counts == 0) or np.any(gene_total_counts == 0):
+            # Check for zero counts before running the test
+            all_isoform_counts = np.concatenate(isoform_counts)
+            all_gene_totals = np.concatenate(gene_total_counts)
+
+            if np.any(all_isoform_counts == 0) or np.any(all_gene_totals == 0) or np.all(all_isoform_counts == 0) or np.all(all_gene_totals == 0):
                 no_counts_isoform = no_counts_isoform + 1
-                # print(f"Skipping gene {gene_id}, isoform {isoform_idx + 1} due to zero counts")
                 continue
+
+            # Handle different replicate numbers by padding shorter arrays
+            max_replicates = max(len(arr) for arr in isoform_counts)
+
+            # Pad arrays to have the same length
+            padded_isoform_counts = []
+            padded_gene_total_counts = []
+
+            for i, (iso_counts, total_counts) in enumerate(zip(isoform_counts, gene_total_counts)):
+                if len(iso_counts) < max_replicates:
+                    # Calculate the mean for padding (to maintain the same statistical properties)
+                    iso_mean = np.mean(iso_counts) if len(iso_counts) > 0 else 0
+                    total_mean = np.mean(total_counts) if len(total_counts) > 0 else 0
+
+                    # Pad with mean values
+                    padded_iso = np.concatenate([iso_counts,
+                                               np.full(max_replicates - len(iso_counts), iso_mean)])
+                    padded_total = np.concatenate([total_counts,
+                                                 np.full(max_replicates - len(total_counts), total_mean)])
+                else:
+                    padded_iso = iso_counts
+                    padded_total = total_counts
+
+                padded_isoform_counts.append(padded_iso)
+                padded_gene_total_counts.append(padded_total)
+
+            # Run the beta-binomial likelihood ratio test
             try:
-                test_result = betabinom_lr_test(isoform_counts, gene_total_counts)
+                test_result = betabinom_lr_test(padded_isoform_counts, padded_gene_total_counts)
                 p_value, ratio_stats = test_result[0], test_result[1]
 
                 # Calculate absolute difference in mean ratios between conditions
@@ -1112,7 +1138,6 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
         return adata, results_df, plotting_df
     else:
         return results_df, plotting_df
-
 
 def test_isoform1_DIU_between_alleles(adata, layer="unique_counts", test_condition="control", inplace=True):
     """
