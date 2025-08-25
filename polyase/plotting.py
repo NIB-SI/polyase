@@ -14,7 +14,7 @@ def plot_allelic_ratios(
     figsize: Tuple[int, int] = (12, 6),
     kde: bool = True,
     save_path: Optional[str] = None
-):
+    ):
     """
     Plot allelic ratios for transcripts in a specific synteny category.
 
@@ -256,7 +256,6 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
     if default_yticks is None:
         yticks = default_yticks
 
-
     # Get the condition names from appropriate columns
     condition_columns = [col for col in results_df.columns if col.startswith(f'{value_prefix}_rep_')]
     if not condition_columns:
@@ -314,9 +313,41 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
         ratio_difference = synt_data.loc[synt_data['FDR'] < sig_threshold, 'ratio_difference'].max() if ('ratio_difference' in synt_data.columns and 'FDR' in synt_data.columns) else np.nan
         n_alleles = synt_data['n_alleles'].iloc[0]
 
-        # Explode the replicate columns
+        # Handle exploding columns with different lengths properly
         explode_cols = [col for col in synt_data.columns if col.startswith(f'{value_prefix}_rep_')]
-        synt_data_exploded = synt_data.explode(explode_cols)
+
+        # Create a list to collect all exploded rows
+        exploded_rows = []
+
+        for idx, row in synt_data.iterrows():
+            # Get the base row data (non-list columns)
+            base_row = {col: row[col] for col in synt_data.columns if col not in explode_cols}
+
+            # Find the maximum length among all explode columns for this row
+            max_length = 0
+            explode_data = {}
+            for col in explode_cols:
+                if isinstance(row[col], (list, np.ndarray)):
+                    explode_data[col] = row[col]
+                    max_length = max(max_length, len(row[col]))
+                else:
+                    # Handle single values by converting to list
+                    explode_data[col] = [row[col]]
+                    max_length = max(max_length, 1)
+
+            # Create one row for each replicate
+            for rep_idx in range(max_length):
+                new_row = base_row.copy()
+                for col in explode_cols:
+                    if rep_idx < len(explode_data[col]):
+                        new_row[col] = explode_data[col][rep_idx]
+                    else:
+                        # Fill missing values with NaN if one condition has fewer replicates
+                        new_row[col] = np.nan
+                exploded_rows.append(new_row)
+
+        # Convert to DataFrame
+        synt_data_exploded = pd.DataFrame(exploded_rows)
 
         # Reshape data for seaborn
         id_vars = ['Synt_id', 'allele', 'transcript_id']
@@ -327,7 +358,7 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
         if 'functional_annotation' in synt_data.columns:
             id_vars.append('functional_annotation')
 
-        synt_data_melted = pd.melt(         
+        synt_data_melted = pd.melt(
             synt_data_exploded,
             id_vars=id_vars,
             value_vars=condition_columns,
@@ -337,6 +368,9 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
 
         # Clean up condition names
         synt_data_melted['condition'] = synt_data_melted['condition'].str.replace(f'{value_prefix}_rep_', '')
+
+        # Remove NaN values that might have been introduced due to unequal replicate numbers
+        synt_data_melted = synt_data_melted.dropna(subset=['value'])
 
         # Create the stripplot
         ax = axes[i]
@@ -389,16 +423,16 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
         # Set title color based on significance
         title_color = sig_color if is_significant else 'black'
         if 'functional_annotation' in synt_data_melted.columns:
-            function_annotation = synt_data_melted['functional_annotation'][0]
+            function_annotation = synt_data_melted['functional_annotation'].iloc[0]
             if function_annotation is not None:
                 function_annotation_text = function_annotation[:20] # shorten in case of long descriptions
-            else: 
+            else:
                 function_annotation_text = "NA"
         else:
             function_annotation = None
             function_annotation_text = None
 
-        transcript_id = synt_data_melted['transcript_id'][0]
+        transcript_id = synt_data_melted['transcript_id'].iloc[0]
         # Add title with optional stats and color based on significance
         ax.set_title(f"{transcript_id}\n{function_annotation_text}\n{fdr_text}", color=title_color)
         ax.set_xlabel('Allele')
@@ -407,9 +441,6 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
         # Set y-limits
         if ylim is not None:
             ax.set_ylim(ylim)
-
-        # if yticks is not None:
-        #     ax.set_yticks(yticks)
 
         # Adjust legend
         if ax.get_legend():
@@ -425,10 +456,7 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
     if output_file:
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
 
-    #return fig
-
-
-
+    return fig
 
 def plot_top_differential_isoforms(results_df, n=5, figsize=(16, 12), palette=None, jitter=0.2, alpha=0.7, ylim=(0, 1), sort_by='p_value', output_file=None, sig_threshold=0.05, difference_threshold=0.05, sig_color='red'):
     """
@@ -945,3 +973,385 @@ def plot_isoform_diu_results(
         print(f"Figure saved to {output_file}")
 
     #return fig
+
+
+
+
+def plot_differential_isoform_usage(
+    results_df,
+    annotation_df,
+    fdr_threshold=0.05,
+    ratio_difference_threshold=0.1,
+    width=1300,
+    height=350,
+    template="simple_white"
+):
+    """
+    Visualize differential isoform usage results using transcript structure plots.
+
+    Filtering is performed at the gene level: if any isoform of a gene meets the
+    significance criteria, all isoforms of that gene will be plotted.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        DataFrame containing differential isoform usage results with columns:
+        - gene_id: Gene identifier
+        - transcript_id: Transcript identifier
+        - sample_name: Sample name
+        - unique_counts_cpm: CPM normalized unique counts
+        - isoform_ratio: Isoform usage ratio
+        - condition: Experimental condition
+        - FDR: False discovery rate (optional for filtering)
+        - ratio_difference: Difference in ratios (optional for filtering)
+    annotation_df : polars.DataFrame
+        Polars DataFrame containing GTF annotation with:
+        - gene_id: Gene identifier
+        - functional_annotation: Gene annotation text (optional)
+        Plus standard GTF columns for RNApysoforms with columns:
+        - gene_id: Gene identifier
+        - functional_annotation: Gene annotation text (optional)
+        Plus standard GTF columns for RNApysoforms
+    fdr_threshold : float, default=0.05
+        FDR threshold for identifying significant genes (applied at gene level)
+    ratio_difference_threshold : float, default=0.1
+        Minimum ratio difference threshold for identifying significant genes (applied at gene level)
+    width : int, default=1300
+        Plot width in pixels
+    height : int, default=350
+        Plot height in pixels
+    template : str, default="simple_white"
+        Plotly template for styling
+
+    Returns
+    -------
+    list
+        List of generated plotly figures
+
+    Raises
+    ------
+    ImportError
+        If required packages (RNApysoforms) are not available
+    ValueError
+        If required columns are missing from input DataFrames
+    """
+    try:
+        import RNApysoforms as RNApy
+        import pandas as pd
+        import polars as pl
+    except ImportError as e:
+        raise ImportError(f"Required package not available: {e}. "
+                         "Please install RNApysoforms for transcript visualization.")
+
+    # Validate required columns
+    required_cols = ['gene_id', 'transcript_id', 'sample_name', 'unique_counts_cpm',
+                     'isoform_ratio', 'condition']
+    missing_cols = [col for col in required_cols if col not in results_df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns in results_df: {missing_cols}")
+
+    # Filter results if thresholds provided - identify significant genes
+    significant_genes = set()
+
+    # Find genes with at least one significant isoform
+    if 'FDR' in results_df.columns:
+        significant_genes.update(
+            results_df[results_df['FDR'] <= fdr_threshold]['gene_id'].unique()
+        )
+
+    if 'ratio_difference' in results_df.columns:
+        significant_genes.update(
+            results_df[results_df['ratio_difference'] >= ratio_difference_threshold]['gene_id'].unique()
+        )
+
+    # If no filtering columns are present, include all genes
+    if 'FDR' not in results_df.columns and 'ratio_difference' not in results_df.columns:
+        significant_genes = set(results_df['gene_id'].unique())
+
+    # Filter to only include data for significant genes (but keep all isoforms of those genes)
+    filtered_df = results_df[results_df['gene_id'].isin(significant_genes)].copy()
+
+    print(f"Found {len(significant_genes)} genes with significant isoforms. Plotting all isoforms for these genes.")
+
+    figures = []
+
+    # Process each gene
+    for gene in filtered_df['gene_id'].unique():
+        print(f"Processing gene: {gene}")
+
+        # Get annotation text (optional)
+        annotation_txt = ""
+        try:
+            # Check if functional_annotation column exists
+            if "functional_annotation" in annotation_df.columns:
+                filtered_annotation = annotation_df.filter(pl.col("gene_id") == gene)
+                if len(filtered_annotation) > 0:
+                    annotation_txt = filtered_annotation.head(1)["functional_annotation"][0].split('/')[0]
+                else:
+                    print(f"Warning: No annotation found for gene {gene}")
+            else:
+                print(f"Info: No functional_annotation column found, using gene ID only")
+        except (IndexError, KeyError, TypeError) as e:
+            print(f"Warning: Could not extract functional annotation for {gene}: {e}")
+            annotation_txt = ""
+
+        # Subset counts matrix for this gene
+        counts_matrix_gene = filtered_df[filtered_df['gene_id'] == gene].copy()
+
+        # Skip if only one transcript
+        if len(counts_matrix_gene['transcript_id'].unique()) < 2:
+            print(f"Skipping {gene} as it has only one transcript")
+            continue
+
+        # Prepare data for RNApysoforms
+        counts_matrix_gene['sample_id'] = counts_matrix_gene['sample_name']
+        counts_matrix_gene['counts'] = counts_matrix_gene['unique_counts_cpm'].astype(float)
+        counts_matrix_gene = pl.from_pandas(counts_matrix_gene)
+
+        try:
+            # Filter annotation and counts matrix
+            sod1_annotation, sod1_counts_matrix = RNApy.gene_filtering(
+                annotation=annotation_df,
+                expression_matrix=counts_matrix_gene,
+                target_gene=gene
+            )
+
+            # Create traces
+            traces = RNApy.make_traces(
+                annotation=sod1_annotation,
+                expression_matrix=sod1_counts_matrix,
+                y='transcript_id',
+                annotation_hue="type",
+                hover_start="start",
+                hover_end="end",
+                expression_columns=["counts", "isoform_ratio"],
+                expression_hue="condition"
+            )
+
+            # Create figure
+            fig = RNApy.make_plot(
+                traces=traces,
+                subplot_titles=["Transcript Structure", "CPM (unique)", "Ratio"],
+                width=width,
+                height=height,
+                boxgap=0.1,
+                boxgroupgap=0.5,
+                horizontal_spacing=0.08,
+                template=template,
+                column_widths=[0.4, 0.3, 0.3]
+            )
+
+            # Update layout with title
+            title_text = f"{gene}"
+            if annotation_txt:
+                title_text += f" {annotation_txt}"
+
+            fig.update_layout(title=dict(
+                text=title_text,
+                x=0.5,
+                xanchor="center"
+            ))
+
+            # Show the plot
+            fig.show()
+            figures.append(fig)
+
+        except Exception as e:
+            print(f"Error processing gene {gene}: {str(e)}")
+            continue
+
+    print(f"Generated {len(figures)} plots for differential isoform usage")
+    return figures
+
+
+def plot_allele_specific_isoform_structure(
+    results_df,
+    annotation_df,
+    ratio_difference_threshold=0.2,
+    width=1300,
+    height=350,
+    template="simple_white"
+):
+    """
+    Visualize allele-specific isoform structure differences.
+
+    Filtering is performed at the syntelog level: if any isoform of a syntelog meets the
+    significance criteria, all isoforms of that syntelog will be plotted.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        DataFrame containing allele-specific results with columns:
+        - Synt_id: Syntelog identifier
+        - isoform_id: Isoform/transcript identifier
+        - gene_id: Gene identifier
+        - haplotype: Haplotype identifier
+        - reference_haplotype: Reference haplotype identifier
+        - sample: Sample identifier
+        - isoform_counts: Isoform counts
+        - isoform_ratio: Isoform usage ratio
+        - ratio_difference: Difference in ratios between haplotypes
+    annotation_df : polars.DataFrame
+        Polars DataFrame containing GTF annotation
+    ratio_difference_threshold : float, default=0.2
+        Minimum ratio difference threshold for identifying significant syntelogs (applied at syntelog level)
+    width : int, default=1300
+        Plot width in pixels
+    height : int, default=350
+        Plot height in pixels
+    template : str, default="simple_white"
+        Plotly template for styling
+
+    Returns
+    -------
+    list
+        List of generated plotly figures
+
+    Raises
+    ------
+    ImportError
+        If required packages are not available
+    ValueError
+        If required columns are missing
+    """
+    try:
+        import RNApysoforms as RNApy
+        import pandas as pd
+        import polars as pl
+    except ImportError as e:
+        raise ImportError(f"Required package not available: {e}")
+
+    # Validate required columns
+    required_cols = ['Synt_id', 'isoform_id', 'gene_id', 'haplotype',
+                     'reference_haplotype', 'sample', 'isoform_counts', 'isoform_ratio']
+    missing_cols = [col for col in required_cols if col not in results_df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns in results_df: {missing_cols}")
+
+    # Filter by ratio difference threshold - identify significant syntelogs
+    significant_syntelogs = set()
+
+    # Find syntelogs with at least one significant isoform
+    significant_syntelogs.update(
+        results_df[results_df['ratio_difference'] >= ratio_difference_threshold]['Synt_id'].unique()
+    )
+
+    # Filter to only include data for significant syntelogs (but keep all isoforms of those syntelogs)
+    filtered_df = results_df[results_df['Synt_id'].isin(significant_syntelogs)].copy()
+
+    print(f"Found {len(significant_syntelogs)} syntelogs with significant allelic differences. Plotting all isoforms for these syntelogs.")
+
+    figures = []
+
+    # Process each syntelog
+    for synt_id in filtered_df['Synt_id'].unique():
+        print(f"Processing Synt_id: {synt_id}")
+
+        # Get gene ID from reference haplotype
+        try:
+            gene = (filtered_df[
+                (filtered_df['Synt_id'] == synt_id) &
+                (filtered_df['haplotype'] == filtered_df['reference_haplotype'])
+            ]['gene_id'].unique()[0])
+            print(f"Gene: {gene}")
+        except IndexError:
+            print(f"Warning: No reference haplotype found for Synt_id {synt_id}")
+            continue
+
+        # Get annotation text (optional)
+        annotation_txt = ""
+        try:
+            # Check if functional_annotation column exists
+            if "functional_annotation" in annotation_df.columns:
+                filtered_annotation = annotation_df.filter(pl.col("gene_id") == gene)
+                if len(filtered_annotation) > 0:
+                    annotation_txt = filtered_annotation.head(1)["functional_annotation"][0].split('/')[0]
+                else:
+                    print(f"Warning: No annotation found for gene {gene}")
+            else:
+                print(f"Info: No functional_annotation column found, using gene ID only")
+        except (IndexError, KeyError, TypeError) as e:
+            print(f"Warning: Could not extract functional annotation for {gene}: {e}")
+            annotation_txt = ""
+
+        # Subset for this syntelog
+        counts_matrix_gene = filtered_df[filtered_df['Synt_id'] == synt_id].copy()
+        counts_matrix_gene['gene_id'] = gene
+        counts_matrix_gene['transcript_id'] = counts_matrix_gene['isoform_id']
+
+        # Skip if only one transcript
+        if len(counts_matrix_gene['transcript_id'].unique()) < 2:
+            print(f"Skipping {gene} (Synt_id: {synt_id}) as it has only one transcript")
+            continue
+
+        # Prepare data for RNApysoforms
+        counts_matrix_gene['sample_id'] = counts_matrix_gene['sample']
+        counts_matrix_gene['counts'] = counts_matrix_gene['isoform_counts'].astype(float)
+        counts_matrix_gene = pl.from_pandas(counts_matrix_gene)
+
+        try:
+            # Filter annotation and counts matrix
+            sod1_annotation, sod1_counts_matrix = RNApy.gene_filtering(
+                annotation=annotation_df,
+                expression_matrix=counts_matrix_gene,
+                target_gene=gene
+            )
+
+            # Create traces
+            traces = RNApy.make_traces(
+                annotation=sod1_annotation,
+                expression_matrix=sod1_counts_matrix,
+                y='transcript_id',
+                annotation_hue="type",
+                hover_start="start",
+                hover_end="end",
+                expression_columns=["counts", "isoform_ratio"],
+                expression_hue="haplotype",
+                marker_size=2
+            )
+
+            # Create figure
+            fig = RNApy.make_plot(
+                traces=traces,
+                subplot_titles=["Transcript Structure", "CPM (unique)", "Ratio"],
+                width=width,
+                height=height,
+                boxgap=0.1,
+                boxgroupgap=0.5,
+                horizontal_spacing=0.08,
+                template=template,
+                column_widths=[0.4, 0.3, 0.3]
+            )
+
+            # Update layout with title
+            title_text = f"{gene}"
+            if annotation_txt:
+                title_text += f" {annotation_txt}"
+            title_text += f" (Synt_id: {synt_id})"
+
+            fig.update_layout(title=dict(
+                text=title_text,
+                x=0.5,
+                xanchor="center"
+            ))
+
+            # Show the plot
+            fig.show()
+            figures.append(fig)
+
+        except Exception as e:
+            print(f"Error processing Synt_id {synt_id} (gene {gene}): {str(e)}")
+            continue
+
+    print(f"Generated {len(figures)} plots for allele-specific isoform structure")
+    return figures
+
+
+# Helper function for optional dependencies
+def _check_transcript_viz_dependencies():
+    """Check if optional dependencies for transcript visualization are available."""
+    try:
+        import RNApysoforms
+        return True
+    except ImportError:
+        return False
