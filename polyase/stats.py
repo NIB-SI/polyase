@@ -144,7 +144,7 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
             condition_total.append(total_counts)
 
             # Append array for this specific allele's counts
-            allele_counts.append(condition_counts[:,allele_idx])
+            allele_counts.append(np.round(condition_counts[:,allele_idx]))  # Round to avoid floating point issues in the test
 
             # Store ratios for this test condition
             allelic_ratios = condition_ratios[:,allele_idx]
