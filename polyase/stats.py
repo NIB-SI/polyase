@@ -833,8 +833,8 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
                         'replicate': rep_idx + 1,
                         'sample_name': sample_name,
                         'isoform_ratio': ratio_value,
-                        'unique_counts': count_value,  # Raw counts
-                        'unique_counts_cpm': cpm_value,  # CPM values
+                        f'{layer}_raw': count_value,  # Raw counts
+                        f'{layer}_cpm': cpm_value,
                         'p_value': p_value,
                         'ratio_difference': ratio_difference,
                         'n_isoforms': len(isoform_indices)
@@ -888,286 +888,6 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
         return adata, results_df, plotting_df
     else:
         return results_df, plotting_df
-
-def test_isoform1_DIU_between_alleles(adata, layer="unique_counts", test_condition="control", inplace=True):
-    """
-    Test if alleles have different isoform usage and store results in AnnData object.
-
-    Parameters
-    -----------
-    adata : AnnData
-        AnnData object containing expression data
-    layer : str, optional
-        Layer containing count data (default: "unique_counts")
-    test_condition : str, optional
-        Variable column name containing condition for testing within (default: "control")
-    inplace : bool, optional
-        Whether to modify the input AnnData object or return a copy (default: True)
-
-    Returns
-    --------
-    pd.DataFrame
-        Results of statistical tests for each syntelog
-    """
-    import pandas as pd
-    import numpy as np
-    import re
-    from statsmodels.stats.multitest import multipletests
-    from isotools._transcriptome_stats import betabinom_lr_test
-    from anndata import AnnData
-
-    # Validate inputs
-    if not isinstance(adata, AnnData):
-        raise ValueError("Input adata must be an AnnData object")
-
-    # Check if layer exists
-    if layer not in adata.layers:
-        raise ValueError(f"Layer '{layer}' not found in AnnData object")
-
-    # Work on a copy if not inplace
-    if not inplace:
-        adata = adata.copy()
-
-    # Get counts and metadata
-    counts = adata.layers[layer].copy()
-
-    # Check for required columns
-    if "Synt_id" not in adata.var:
-        raise ValueError("'Synt_id' not found in adata.var")
-    synt_ids = adata.var["Synt_id"]
-
-    if "haplotype" not in adata.var:
-        raise ValueError("'haplotype' not found in adata.var")
-    haplotypes = adata.var["haplotype"]
-
-    # Check for transcript IDs
-    if not adata.var_names.any():
-        raise ValueError("'transcript_id' not found in adata.var_names")
-    transcript_ids = adata.var_names
-
-    # Check conditions
-    if test_condition not in adata.obs['condition'].unique() and test_condition != "all":
-        raise ValueError(f"Condition '{test_condition}' not found in adata.obs['condition']")
-
-    unique_synt_ids = np.unique(synt_ids)
-
-    # Remove NaN and 0 values from unique_synt_ids
-    unique_synt_ids = unique_synt_ids[~pd.isna(unique_synt_ids)]
-    unique_synt_ids = unique_synt_ids[unique_synt_ids != 0]
-
-    # Prepare results dataframe
-    results = []
-
-    # Track progress
-    total_syntelogs = len(unique_synt_ids)
-    processed = 0
-
-    # Process each syntelog
-    for synt_id in unique_synt_ids:
-        processed += 1
-        if processed % 100 == 0:
-            print(f"Processing syntelog {processed}/{total_syntelogs}")
-
-        # Find all transcripts belonging to this syntelog
-        synt_mask = synt_ids == synt_id
-        synt_indices = np.where(synt_mask)[0]
-
-        # Skip if no transcripts found
-        if len(synt_indices) == 0:
-            continue
-
-        # Get unique haplotypes for this syntelog
-        synt_haplotypes = haplotypes.iloc[synt_indices]
-        unique_haplotypes = synt_haplotypes.unique()
-
-        # Skip if fewer than 2 haplotypes and not more than one isoform
-        if len(unique_haplotypes) < 2 and len(synt_indices) < (len(unique_haplotypes) *2):
-            print(f"Skipping syntelog {synt_id} with less than 2 haplotypes or less than 2 isoforms")
-            continue
-
-
-        # Get sample indices for the test condition
-        if test_condition == "all":
-            condition_indices = np.arange(counts.shape[0])
-        else:
-            condition_indices = np.where(adata.obs['condition'] == test_condition)[0]
-
-        # Find the most expressed isoform across all haplotypes for this syntelog
-        synt_counts = counts[np.ix_(condition_indices, synt_indices)]
-        total_counts_per_transcript = np.sum(synt_counts, axis=0)
-
-        # Skip if all counts are zero
-        if np.sum(total_counts_per_transcript) == 0:
-            continue
-
-        max_count_local_idx = np.argmax(total_counts_per_transcript)
-        max_count_global_idx = synt_indices[max_count_local_idx]
-        max_count_transcript_id = transcript_ids[max_count_global_idx]
-
-        # Extract the isoform number from the most expressed transcript
-        try:
-            isoform_match = re.search(r'\.(\d+)\.', max_count_transcript_id)
-            if isoform_match:
-                target_isoform = isoform_match.group(1)
-            elif isoform_match is None:
-                # Try to extract the transcript name without isoform number
-                target_isoform = max_count_transcript_id.split('.')[0]
-
-                if target_isoform is None or target_isoform == "":
-                    # If we couldn't extract a valid isoform number, skip this syntelog
-                    print(f"Could not extract isoform number from {max_count_transcript_id}, skipping syntelog {synt_id}")
-                    continue
-        except Exception as e:
-            print(f"Error extracting isoform from {max_count_transcript_id}: {e}")
-            continue
-
-        # Find the same isoform in each haplotype
-        haplotype_isoform_data = {}
-
-        for hap in unique_haplotypes:
-            # Get indices for this haplotype within the syntelog
-            hap_mask = synt_haplotypes == hap
-            hap_indices_local = np.where(hap_mask)[0]
-            hap_indices_global = synt_indices[hap_indices_local]
-
-            # Find the target isoform in this haplotype
-            target_isoform_idx = None
-            for idx in hap_indices_global:
-                transcript_id = transcript_ids[idx]
-
-                try:
-                    # First try to match the isoform number pattern
-                    isoform_match = re.search(r'\.(\d+)\.', transcript_id)
-                    if isoform_match and isoform_match.group(1) == target_isoform:
-                        target_isoform_idx = idx
-                        break
-                    else:
-                        # Fallback: try different patterns or matching strategies
-                        # This depends on your specific transcript ID format
-                        transcript_parts = transcript_id.split('.')
-                        if len(transcript_parts) >= 2 and transcript_parts[1] == target_isoform:
-                            target_isoform_idx = idx
-                            break
-                except:
-                    continue
-
-            if target_isoform_idx is not None:
-                # Get counts for this specific isoform
-                isoform_counts = counts[np.ix_(condition_indices, [target_isoform_idx])][:, 0]
-
-                # Get total counts for all isoforms of this haplotype in this syntelog
-                hap_total_counts = np.sum(counts[np.ix_(condition_indices, hap_indices_global)], axis=1)
-
-                haplotype_isoform_data[hap] = {
-                    'isoform_counts': isoform_counts,
-                    'total_counts': hap_total_counts,
-                    'transcript_id': transcript_ids[target_isoform_idx]
-                }
-
-        # Skip if we don't have the target isoform in at least 2 haplotypes
-        if len(haplotype_isoform_data) < 2:
-            print(f"Target isoform {target_isoform} not found in enough haplotypes for syntelog {synt_id}")
-            continue
-
-        # Calculate average ratios for each haplotype
-        haplotype_ratios = {}
-        for hap, data in haplotype_isoform_data.items():
-            # Avoid division by zero
-            valid_samples = data['total_counts'] > 0
-            if np.sum(valid_samples) > 0:
-                ratios = np.zeros_like(data['total_counts'], dtype=float)
-                ratios[valid_samples] = data['isoform_counts'][valid_samples] / data['total_counts'][valid_samples]
-                haplotype_ratios[hap] = np.mean(ratios)
-            else:
-                haplotype_ratios[hap] = 0.0
-
-        # Find haplotypes with max and min ratios
-        if len(haplotype_ratios) < 2:
-            continue
-
-        sorted_haps = sorted(haplotype_ratios.keys(), key=lambda x: haplotype_ratios[x])
-        min_hap = sorted_haps[0]
-        max_hap = sorted_haps[-1]
-
-        # Skip if ratios are the same (no difference to test)
-        if haplotype_ratios[min_hap] == haplotype_ratios[max_hap]:
-            continue
-
-        # Prepare data for statistical test
-        min_hap_data = haplotype_isoform_data[min_hap]
-        max_hap_data = haplotype_isoform_data[max_hap]
-
-        allele_counts = [min_hap_data['isoform_counts'], max_hap_data['isoform_counts']]
-        condition_total = [min_hap_data['total_counts'], max_hap_data['total_counts']]
-
-        # Skip if any total counts are zero
-        if np.any([np.sum(ct) == 0 for ct in condition_total]):
-            print(f"Skipping syntelog {synt_id} with zero total counts in some haplotypes.")
-            continue
-
-        # Run the beta-binomial likelihood ratio test
-        try:
-            test_result = betabinom_lr_test(allele_counts, condition_total)
-            p_value, ratio_stats = test_result[0], test_result[1]
-
-            # Calculate absolute difference in mean ratios between haplotypes
-            ratio_difference = abs(ratio_stats[0] - ratio_stats[2]) if len(ratio_stats) >= 3 else abs(haplotype_ratios[min_hap] - haplotype_ratios[max_hap])
-
-        except Exception as e:
-            print(f"Error testing syntelog {synt_id}: {str(e)}")
-            continue
-
-        # Prepare result dictionary
-        result_dict = {
-            'Synt_id': synt_id,
-            'target_isoform': target_isoform,
-            'min_ratio_haplotype': min_hap,
-            'max_ratio_haplotype': max_hap,
-            'min_ratio_transcript_id': min_hap_data['transcript_id'],
-            'max_ratio_transcript_id': max_hap_data['transcript_id'],
-            'p_value': p_value,
-            'ratio_difference': ratio_difference,
-            'n_haplotypes': len(haplotype_isoform_data),
-            f'ratio_{min_hap}_mean': haplotype_ratios[min_hap],
-            f'ratio_{max_hap}_mean': haplotype_ratios[max_hap]
-        }
-
-        # Add mean ratios for ALL haplotypes (including those not tested)
-        for hap, ratio in haplotype_ratios.items():
-            result_dict[f'ratio_{hap}_mean'] = ratio
-
-        # Add transcript IDs for all haplotypes that have the target isoform
-        for hap, data in haplotype_isoform_data.items():
-            result_dict[f'transcript_id_{hap}'] = data['transcript_id']
-
-        # Add list of all haplotypes for this syntelog
-        result_dict['all_haplotypes'] = list(haplotype_ratios.keys())
-
-        # Store results
-        results.append(result_dict)
-
-    # Convert results to DataFrame
-    results_df = pd.DataFrame(results)
-
-    # Multiple testing correction if we have results
-    if len(results_df) > 0:
-        # Handle NaN p-values
-        results_df['p_value'] = results_df['p_value'].fillna(1)
-        results_df['FDR'] = multipletests(results_df['p_value'], method='fdr_bh')[1]
-        results_df = results_df.sort_values('p_value')
-
-        # Print summary
-        significant_results = results_df[(results_df['FDR'] < 0.05) & (results_df['ratio_difference'] > 0.2)]
-        print(f"Found {len(significant_results)} from {len(results_df)} syntelogs with significantly different isoform usage between alleles (FDR < 0.05 and ratio difference > 0.2)")
-
-        # Store results in AnnData object if inplace
-        if inplace:
-            adata.uns['isoform_diu_test'] = results_df
-    else:
-        print("No results found")
-
-    return results_df
-
 
 def test_isoform_DIU_between_alleles_with_major_minor_plotting(
     adata, layer="unique_counts", test_condition="control",
@@ -1460,8 +1180,8 @@ def test_isoform_DIU_between_alleles_with_major_minor_plotting(
                         'isoform_rank': isoform_rank,  # "major" or "minor"
                         'isoform_id': isoform_id,  # Reference ID for major, actual ID for minor
                         'transcript_id': transcript_id,  # Actual transcript used
-                        'isoform_counts': int(isoform_counts),
-                        'total_counts': int(hap_total_counts),
+                        f'{layer}_isoform_counts': int(isoform_counts),
+                        f'{layer}_total_counts': int(hap_total_counts),
                         'isoform_ratio': float(isoform_ratio),
                         'similarity_score': float(similarity_score),
                         'structure': ','.join(map(str, structure)),
@@ -1504,197 +1224,6 @@ def test_isoform_DIU_between_alleles_with_major_minor_plotting(
             print(plotting_df[example_cols].head(6))
 
     return results_df, plotting_df
-
-def test_isoform_DIU_between_alleles_by_structure(
-    adata, layer="unique_counts", test_condition="control",
-    structure_similarity_threshold=0.6, min_similarity_for_matching=0.8,
-    inplace=True, verbose=True
-):
-    """
-    Test if alleles have different isoform usage using expression-aware adaptive structure-based matching.
-
-    This function handles cases where haplotypes have different numbers of isoforms by:
-    1. Finding the most expressed isoform structure across all haplotypes
-    2. For each haplotype, finding the most similar transcript structure
-    3. When multiple transcripts have similar structures, choosing the most expressed one
-    4. Comparing usage of the best matching transcripts across haplotypes
-
-    Parameters
-    -----------
-    adata : AnnData
-        AnnData object containing expression data with exon structure information
-    layer : str, optional
-        Layer containing count data (default: "unique_counts")
-    test_condition : str, optional
-        Variable column name containing condition for testing within (default: "control")
-    structure_similarity_threshold : float, optional
-        Minimum similarity score (0-1) for considering structures as similar (default: 0.6)
-    min_similarity_for_matching : float, optional
-        Minimum similarity required for a transcript to be considered a match (default: 0.4)
-    inplace : bool, optional
-        Whether to modify the input AnnData object or return a copy (default: True)
-    verbose : bool, optional
-        Whether to print detailed progress information (default: True)
-
-    Returns
-    --------
-    pd.DataFrame
-        Results of statistical tests for each syntelog with additional columns:
-        - expression_based_choices: number of haplotypes where expression was used to choose
-        - total_candidates_found: total number of candidate transcripts found
-        - expression_levels: dictionary of expression levels for selected transcripts
-    """
-    import pandas as pd
-    import numpy as np
-    from statsmodels.stats.multitest import multipletests
-    from isotools._transcriptome_stats import betabinom_lr_test
-    from anndata import AnnData
-
-    # Validate inputs
-    if not isinstance(adata, AnnData):
-        raise ValueError("Input adata must be an AnnData object")
-
-    if layer not in adata.layers:
-        raise ValueError(f"Layer '{layer}' not found in AnnData object")
-
-    required_structure_cols = ['exon_structure', 'n_exons']
-    missing_cols = [col for col in required_structure_cols if col not in adata.var.columns]
-    if missing_cols:
-        raise ValueError(f"Missing required structure columns: {missing_cols}. "
-                        "Please run add_exon_structure() first.")
-
-    if 'exon_lengths' not in adata.uns:
-        raise ValueError("'exon_lengths' not found in adata.uns. Please run add_exon_structure() first.")
-
-    if not inplace:
-        adata = adata.copy()
-
-    counts = adata.layers[layer].copy()
-
-    if "Synt_id" not in adata.var:
-        raise ValueError("'Synt_id' not found in adata.var")
-    synt_ids = adata.var["Synt_id"]
-
-    if "haplotype" not in adata.var:
-        raise ValueError("'haplotype' not found in adata.var")
-    haplotypes = adata.var["haplotype"]
-
-    if not adata.var_names.any():
-        raise ValueError("'transcript_id' not found in adata.var_names")
-    transcript_ids = adata.var_names
-
-    if test_condition not in adata.obs['condition'].unique() and test_condition != "all":
-        raise ValueError(f"Condition '{test_condition}' not found in adata.obs['condition']")
-
-    exon_lengths_dict = adata.uns['exon_lengths']
-
-    unique_synt_ids = np.unique(synt_ids)
-    unique_synt_ids = unique_synt_ids[~pd.isna(unique_synt_ids)]
-    unique_synt_ids = unique_synt_ids[unique_synt_ids != 0]
-
-    results = []
-    total_syntelogs = len(unique_synt_ids)
-    processed = 0
-    successful_matches = 0
-    failed_matches = 0
-    expression_based_choices = 0
-
-    if verbose:
-        print(f"Processing {total_syntelogs} syntelogs for expression-aware adaptive structure-based DIU analysis...")
-
-    # Process each syntelog
-    for synt_id in unique_synt_ids:
-        processed += 1
-        if verbose and processed % 100 == 0:
-            print(f"Processing syntelog {processed}/{total_syntelogs}")
-
-        synt_mask = synt_ids == synt_id
-        synt_indices = np.where(synt_mask)[0]
-
-        if len(synt_indices) == 0:
-            continue
-
-        synt_haplotypes = haplotypes.iloc[synt_indices]
-        unique_haplotypes = synt_haplotypes.dropna().unique()
-
-        if len(unique_haplotypes) < 2:
-            continue
-
-        if test_condition == "all":
-            condition_indices = np.arange(counts.shape[0])
-        else:
-            condition_indices = np.where(adata.obs['condition'] == test_condition)[0]
-
-        # Use improved reference structure selection
-        reference_structure, reference_transcript = _find_reference_structure(
-            synt_indices, transcript_ids, exon_lengths_dict, counts, condition_indices
-        )
-
-        if reference_structure is None:
-            continue
-
-        # Use expression-aware matching
-        haplotype_matches = _find_best_matches_per_haplotype(
-            synt_indices, unique_haplotypes, synt_haplotypes, transcript_ids,
-            exon_lengths_dict, reference_structure, min_similarity_for_matching,
-            counts, condition_indices, verbose and processed <= 5
-        )
-
-        if len(haplotype_matches) < 2:
-            failed_matches += 1
-            continue
-
-        successful_matches += 1
-
-        # Count cases where expression was used to break ties
-        expression_choices = sum(1 for match in haplotype_matches.values()
-                               if match.get('n_candidates_best_similarity', 1) > 1)
-        expression_based_choices += expression_choices
-
-        # Perform statistical test with enhanced results
-        try:
-            test_results = _perform_statistical_test(
-                haplotype_matches, synt_id, reference_structure, reference_transcript
-            )
-            if test_results:
-                results.append(test_results)
-        except Exception as e:
-            if verbose and processed <= 5:
-                print(f"  Error testing syntelog {synt_id}: {str(e)}")
-            continue
-
-    if verbose:
-        print(f"\nCompleted processing:")
-        print(f"  Total syntelogs: {total_syntelogs}")
-        print(f"  Successful matches: {successful_matches}")
-        print(f"  Failed matches: {failed_matches}")
-        print(f"  Expression-based choices: {expression_based_choices}")
-        print(f"  Results generated: {len(results)}")
-
-    # Convert results to DataFrame and apply multiple testing correction
-    results_df = pd.DataFrame(results)
-
-    if len(results_df) > 0:
-        results_df['p_value'] = results_df['p_value'].fillna(1)
-        results_df['FDR'] = multipletests(results_df['p_value'], method='fdr_bh')[1]
-        results_df = results_df.sort_values('p_value')
-
-        significant_results = results_df[
-            (results_df['FDR'] < 0.05) &
-            (results_df['ratio_difference'] > 0.2)
-        ]
-
-
-        print(f"\nFound {len(significant_results)} from {len(results_df)} syntelogs with "
-              f"significantly different isoform usage between alleles (FDR < 0.05, ratio diff > 0.2)")
-
-        if inplace:
-            adata.uns['adaptive_structure_diu_test_v2'] = results_df
-    else:
-        if verbose:
-            print("No results found")
-
-    return results_df
 
 
 def _calculate_structure_similarity(structure1, structure2):
@@ -1962,9 +1491,19 @@ def _perform_statistical_test(haplotype_matches, synt_id, reference_structure, r
     min_hap_data = haplotype_matches[min_hap]
     max_hap_data = haplotype_matches[max_hap]
 
-    allele_counts = [min_hap_data['isoform_counts'], max_hap_data['isoform_counts']]
-    condition_total = [min_hap_data['total_counts'], max_hap_data['total_counts']]
+   
 
+    # Convert to integers by rounding any non-integer values
+    allele_counts = [
+        np.round(min_hap_data['isoform_counts']).astype(int), 
+        np.round(max_hap_data['isoform_counts']).astype(int)
+    ]
+    condition_total = [
+        np.round(min_hap_data['total_counts']).astype(int), 
+        np.round(max_hap_data['total_counts']).astype(int)
+    ]
+
+    print(allele_counts)
     if np.any([np.sum(ct) == 0 for ct in condition_total]):
         return None
 
@@ -1977,6 +1516,7 @@ def _perform_statistical_test(haplotype_matches, synt_id, reference_structure, r
         ratio_difference = abs(ratio_stats[0] - ratio_stats[2]) if len(ratio_stats) >= 3 else \
                           abs(haplotype_ratios[min_hap] - haplotype_ratios[max_hap])
     except Exception:
+        print('not tested')
         return None
 
     # Assess matching quality
@@ -2039,3 +1579,195 @@ def _perform_statistical_test(haplotype_matches, synt_id, reference_structure, r
     result['all_haplotypes'] = list(haplotype_matches.keys())
 
     return result
+
+def test_isoform_DIU_between_alleles_by_structure(
+    adata, layer="unique_counts", test_condition="control",
+    structure_similarity_threshold=0.6, min_similarity_for_matching=0.8,
+    inplace=True, verbose=True
+):
+    """
+    Test if alleles have different isoform usage using expression-aware adaptive structure-based matching.
+
+    This function handles cases where haplotypes have different numbers of isoforms by:
+    1. Finding the most expressed isoform structure across all haplotypes
+    2. For each haplotype, finding the most similar transcript structure
+    3. When multiple transcripts have similar structures, choosing the most expressed one
+    4. Comparing usage of the best matching transcripts across haplotypes
+
+    Parameters
+    -----------
+    adata : AnnData
+        AnnData object containing expression data with exon structure information
+    layer : str, optional
+        Layer containing count data (default: "unique_counts")
+    test_condition : str, optional
+        Variable column name containing condition for testing within (default: "control")
+    structure_similarity_threshold : float, optional
+        Minimum similarity score (0-1) for considering structures as similar (default: 0.6)
+    min_similarity_for_matching : float, optional
+        Minimum similarity required for a transcript to be considered a match (default: 0.4)
+    inplace : bool, optional
+        Whether to modify the input AnnData object or return a copy (default: True)
+    verbose : bool, optional
+        Whether to print detailed progress information (default: True)
+
+    Returns
+    --------
+    pd.DataFrame
+        Results of statistical tests for each syntelog with additional columns:
+        - expression_based_choices: number of haplotypes where expression was used to choose
+        - total_candidates_found: total number of candidate transcripts found
+        - expression_levels: dictionary of expression levels for selected transcripts
+    """
+    import pandas as pd
+    import numpy as np
+    from statsmodels.stats.multitest import multipletests
+    from isotools._transcriptome_stats import betabinom_lr_test
+    from anndata import AnnData
+
+    # Validate inputs
+    if not isinstance(adata, AnnData):
+        raise ValueError("Input adata must be an AnnData object")
+
+    if layer not in adata.layers:
+        raise ValueError(f"Layer '{layer}' not found in AnnData object")
+
+    required_structure_cols = ['exon_structure', 'n_exons']
+    missing_cols = [col for col in required_structure_cols if col not in adata.var.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required structure columns: {missing_cols}. "
+                        "Please run add_exon_structure() first.")
+
+    if 'exon_lengths' not in adata.uns:
+        raise ValueError("'exon_lengths' not found in adata.uns. Please run add_exon_structure() first.")
+
+    if not inplace:
+        adata = adata.copy()
+
+    counts = adata.layers[layer].copy()
+
+    if "Synt_id" not in adata.var:
+        raise ValueError("'Synt_id' not found in adata.var")
+    synt_ids = adata.var["Synt_id"]
+
+    if "haplotype" not in adata.var:
+        raise ValueError("'haplotype' not found in adata.var")
+    haplotypes = adata.var["haplotype"]
+
+    if not adata.var_names.any():
+        raise ValueError("'transcript_id' not found in adata.var_names")
+    transcript_ids = adata.var_names
+
+    if test_condition not in adata.obs['condition'].unique() and test_condition != "all":
+        raise ValueError(f"Condition '{test_condition}' not found in adata.obs['condition']")
+
+    exon_lengths_dict = adata.uns['exon_lengths']
+
+    unique_synt_ids = np.unique(synt_ids)
+    unique_synt_ids = unique_synt_ids[~pd.isna(unique_synt_ids)]
+    unique_synt_ids = unique_synt_ids[unique_synt_ids != 0]
+
+    results = []
+    total_syntelogs = len(unique_synt_ids)
+    processed = 0
+    successful_matches = 0
+    failed_matches = 0
+    expression_based_choices = 0
+
+    if verbose:
+        print(f"Processing {total_syntelogs} syntelogs for expression-aware adaptive structure-based DIU analysis...")
+
+    # Process each syntelog
+    for synt_id in unique_synt_ids:
+        processed += 1
+        if verbose and processed % 100 == 0:
+            print(f"Processing syntelog {processed}/{total_syntelogs}")
+
+        synt_mask = synt_ids == synt_id
+        synt_indices = np.where(synt_mask)[0]
+
+        if len(synt_indices) == 0:
+            continue
+
+        synt_haplotypes = haplotypes.iloc[synt_indices]
+        unique_haplotypes = synt_haplotypes.dropna().unique()
+
+        if len(unique_haplotypes) < 2:
+            continue
+
+        if test_condition == "all":
+            condition_indices = np.arange(counts.shape[0])
+        else:
+            condition_indices = np.where(adata.obs['condition'] == test_condition)[0]
+
+        # Use improved reference structure selection
+        reference_structure, reference_transcript = _find_reference_structure(
+            synt_indices, transcript_ids, exon_lengths_dict, counts, condition_indices
+        )
+
+        if reference_structure is None:
+            continue
+
+        # Use expression-aware matching
+        haplotype_matches = _find_best_matches_per_haplotype(
+            synt_indices, unique_haplotypes, synt_haplotypes, transcript_ids,
+            exon_lengths_dict, reference_structure, min_similarity_for_matching,
+            counts, condition_indices, verbose and processed <= 5
+        )
+
+        if len(haplotype_matches) < 2:
+            failed_matches += 1
+            continue
+
+        successful_matches += 1
+
+        # Count cases where expression was used to break ties
+        expression_choices = sum(1 for match in haplotype_matches.values()
+                               if match.get('n_candidates_best_similarity', 1) > 1)
+        expression_based_choices += expression_choices
+
+        # Perform statistical test with enhanced results
+        try:
+            test_results = _perform_statistical_test(
+                haplotype_matches, synt_id, reference_structure, reference_transcript
+            )
+            if test_results:
+                results.append(test_results)
+        except Exception as e:
+            if verbose and processed <= 5:
+                print(f"  Error testing syntelog {synt_id}: {str(e)}")
+            continue
+
+    if verbose:
+        print(f"\nCompleted processing:")
+        print(f"  Total syntelogs: {total_syntelogs}")
+        print(f"  Successful matches: {successful_matches}")
+        print(f"  Failed matches: {failed_matches}")
+        print(f"  Expression-based choices: {expression_based_choices}")
+        print(f"  Results generated: {len(results)}")
+
+    # Convert results to DataFrame and apply multiple testing correction
+    results_df = pd.DataFrame(results)
+
+    if len(results_df) > 0:
+        results_df['p_value'] = results_df['p_value'].fillna(1)
+        results_df['FDR'] = multipletests(results_df['p_value'], method='fdr_bh')[1]
+        results_df = results_df.sort_values('p_value')
+
+        significant_results = results_df[
+            (results_df['FDR'] < 0.05) &
+            (results_df['ratio_difference'] > 0.2)
+        ]
+
+
+        print(f"\nFound {len(significant_results)} from {len(results_df)} syntelogs with "
+              f"significantly different isoform usage between alleles (FDR < 0.05, ratio diff > 0.2)")
+
+        if inplace:
+            adata.uns['adaptive_structure_diu_test_v2'] = results_df
+    else:
+        if verbose:
+            print("No results found")
+
+    return results_df
+
