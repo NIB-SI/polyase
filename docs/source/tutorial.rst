@@ -69,9 +69,36 @@ The main output we are interested in is the ``syntelogfinder/output_wheat/03_GEN
    :align: center
    :alt: Syntelog categories combined bar plots
 
-We can see here that the exon lengths are very different between the genes in the 1hapA_1hapB_1hapD synteny category, but the exon lengths are more similar within each haplotype, with most of them having the same lengths.
+We can see here that the exon lengths are very different between the genes in the 1hapA_1hapB_1hapD_s synteny category, but the exon lengths are more similar within each haplotype, with most of them having the same lengths.
 
 .. figure:: /_static/images/tutorial/wheat_example_different_UTRlengths.png
    :width: 70%
    :align: center
    :alt: Different UTR lengths
+
+
+
+So to avoid any bias in read mapping to the longest haplotype (if on the other haplotypes the transcript is too short) we will modify the gff3 file to "chop" the UTRs off that more transcripts have the same length.
+
+
+longrnaseq
+***************
+
+Prepare the ``assets/sample.csv`` file:
+.. code-block:: csv
+    sample,fastq_1
+    SRR33004955,fastq/SRR33004955.fastq
+    SRR33004956,fastq/SRR33004956.fastq
+    SRR33004957,fastq/SRR33004957.fastq
+    SRR33004958,fastq/SRR33004958.fastq
+
+.. code-block:: bash
+
+    nextflow run main.nf -resume -profile singularity \
+                        --input assets/samplesheet_AK58.csv \
+                        --outdir output_wheat_AK58 \
+                        --fasta genome/GWHANRF00000000.renamed.fasta \
+                        --gtf  GWHANRF00000000.renamed.cds2exon.gtf \
+                        --centrifuge_db centrifuge/dbs_v2018/ \
+                        --sqanti_dir sqanti3/release_sqanti3 \
+                        --sqanti_test -bg --technology PacBio --large_genome
