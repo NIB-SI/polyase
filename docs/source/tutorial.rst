@@ -62,8 +62,12 @@ The main output we are interested in is the `syntelogfinder/output_wheat/03_GENE
    :align: center
    :alt: Syntelog categories pie chart
 
+- GWHANRF00000000.renamed_genespace_combined_barplots.svg
 
 .. figure:: /_static/images/tutorial/GWHANRF00000000.renamed_genespace_combined_barplots.svg
    :width: 60%
    :align: center
-   :alt: GitHub authorization page
+   :alt: Syntelog categories combined bar plots
+
+
+We can see here that the exon length are very different between the genes in the 1hapA_1hapB_1hapD synteny category, but the exon lengths are more similar within each haplotype, with most of them having the same lengths.
