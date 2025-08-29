@@ -27,6 +27,12 @@ documentation for details.
 
 .. toctree::
    :maxdepth: 2
+   :caption: Tutorial:
+
+   tutorial
+
+.. toctree::
+   :maxdepth: 2
    :caption: API Reference:
 
    modules
