@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyase"
-version = "0.1.5"
+version = "0.1.6"
 description = "A package for analyzing allele-specific expression in polyploid plants"
 authors = [
     {name = "nadjano", email = "nadja.franziska.nolte@nib.si"}
 ]
 license = {text = "MIT"}
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.13"
 dependencies = [
         "numpy",
         "scipy",
@@ -19,6 +19,7 @@ dependencies = [
         "anndata",
         "matplotlib",
         "seaborn",
+        "RNApysoforms",
         "isotools"
 ]
 

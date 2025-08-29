@@ -775,9 +775,9 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
                     padded_iso = iso_counts
                     padded_total = total_counts
 
-                padded_isoform_counts.append(padded_iso)
-                padded_gene_total_counts.append(padded_total)
-
+                padded_isoform_counts.append(padded_iso.astype(int)) # to integer for testing function
+                padded_gene_total_counts.append(padded_total.astype(int))
+                
             # Run the beta-binomial likelihood ratio test
             try:
                 test_result = betabinom_lr_test(padded_isoform_counts, padded_gene_total_counts)
@@ -1503,7 +1503,7 @@ def _perform_statistical_test(haplotype_matches, synt_id, reference_structure, r
         np.round(max_hap_data['total_counts']).astype(int)
     ]
 
-    print(allele_counts)
+
     if np.any([np.sum(ct) == 0 for ct in condition_total]):
         return None
 

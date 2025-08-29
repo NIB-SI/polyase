@@ -676,7 +676,7 @@ def plot_top_differential_isoforms(results_df, n=5, figsize=(16, 12), palette=No
     if output_file:
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
 
-    return fig
+    #return fig
 
 
 def convert_pvalue_to_asterisks(pvalue):
