@@ -8,7 +8,7 @@ from pathlib import Path
 
 # Import the functions to test
 # Assuming they're in polyase/exon_structure.py
-from polyase.structure import (
+from polyase.exon_structure import (
     add_exon_structure,
     add_structure_from_gtf,
     _create_transcript_structure_df,
@@ -333,8 +333,16 @@ def test_empty_gtf_dataframe():
 
     result = add_exon_structure(adata, gtf_df=empty_gtf, inplace=False, verbose=False)
 
-    # Should return None when no structures found
-    assert result is None
+    # When inplace=False, should return a copy even if no structures found
+    # The warning message indicates no structures were extracted
+    assert result is not None
+    assert isinstance(result, AnnData)
+
+    # Test with inplace=True to check it returns None
+    adata2 = AnnData(np.zeros((5, 3)))
+    adata2.var_names = ['t1', 't2', 't3']
+    result2 = add_exon_structure(adata2, gtf_df=empty_gtf, inplace=True, verbose=False)
+    assert result2 is None
 
 
 def test_transcript_length_calculation(create_gtf_dataframe):
