@@ -7,8 +7,7 @@ import os
 from pathlib import Path
 
 # Import the functions to test
-# Assuming they're in polyase/exon_structure.py
-from polyase.exon_structure import (
+from polyase.structure import (
     add_exon_structure,
     add_structure_from_gtf,
     _create_transcript_structure_df,
