@@ -442,7 +442,7 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
 
             # Get transcript ID and parse allele info
             gene_id = gene_ids[allele_pos]
-            transcript_id = transcript_ids[allele_pos]
+            transcript_id = transcript_ids.iloc[allele_pos]
             functional_annotation = functional_annotations.iloc[allele_pos]
 
             haplotype = adata.var['haplotype'].iloc[allele_indices[allele_idx]]
@@ -777,7 +777,7 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
 
                 padded_isoform_counts.append(padded_iso.astype(int)) # to integer for testing function
                 padded_gene_total_counts.append(padded_total.astype(int))
-                
+
             # Run the beta-binomial likelihood ratio test
             try:
                 test_result = betabinom_lr_test(padded_isoform_counts, padded_gene_total_counts)
@@ -1491,15 +1491,15 @@ def _perform_statistical_test(haplotype_matches, synt_id, reference_structure, r
     min_hap_data = haplotype_matches[min_hap]
     max_hap_data = haplotype_matches[max_hap]
 
-   
+
 
     # Convert to integers by rounding any non-integer values
     allele_counts = [
-        np.round(min_hap_data['isoform_counts']).astype(int), 
+        np.round(min_hap_data['isoform_counts']).astype(int),
         np.round(max_hap_data['isoform_counts']).astype(int)
     ]
     condition_total = [
-        np.round(min_hap_data['total_counts']).astype(int), 
+        np.round(min_hap_data['total_counts']).astype(int),
         np.round(max_hap_data['total_counts']).astype(int)
     ]
 
@@ -1760,7 +1760,7 @@ def test_isoform_DIU_between_alleles_by_structure(
         ]
 
 
-        print(f"\nFound {len(significant_results)} from {len(results_df)} syntelogs with "
+        print(f"\nFound {len(significant_results)} from {len(unique_synt_ids)} syntelogs with "
               f"significantly different isoform usage between alleles (FDR < 0.05, ratio diff > 0.2)")
 
         if inplace:

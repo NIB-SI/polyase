@@ -92,6 +92,8 @@ Prepare the ``assets/sample.csv`` file:
     SRR33004957,fastq/SRR33004957.fastq
     SRR33004958,fastq/SRR33004958.fastq
 
+The wheat is very large so we need to use the option ``--large_genome`` to choose the right mapping options.
+
 .. code-block:: bash
 
     nextflow run main.nf -resume -profile singularity \
