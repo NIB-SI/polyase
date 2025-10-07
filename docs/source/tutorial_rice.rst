@@ -1,107 +1,269 @@
-Syntelog identification in hexaploid wheat
+Syntelog Identification in Diploid Rice
 ==========================================
 
-Running the full syntelogsfinder pipeline on wheat example
-**********************************************************
+Overview
+--------
 
-This is an example of running the whole pipeline on an example.
-We will use a wheat long-read RNA-seq dataset from the cultivar AK58.
+This tutorial demonstrates how to run the syntelogsfinder pipeline on a rice dataset. We'll use long-read RNA-seq data from the cultivar Nipponbare to identify syntelogs (homeologous gene pairs) in a diploid genome.
 
-Long-read RNA-seq
------------------
+**What you'll learn:**
 
-The four samples can be found `here <https://www.ncbi.nlm.nih.gov/Traces/study/?acc=SRP576947&o=acc_s%3Aa&s=SRR33004955,SRR33004956,SRR33004957,SRR33004958>`_.
-We have two replicates from stem tissue and two from leaf tissue.
-*Note*: We analyzed these samples, but the metadata we found is not very clear, and there are just two replicates per tissue, so please do not consider this as a full analysis.
+* How to prepare a phased reference genome with annotations
+* How to identify syntelogs using the syntelogsfinder pipeline
+* How to analyze long-read RNA-seq data with the longrnaseq pipeline
 
-Phased reference genome and annotation
---------------------------------------
+Part 1: Preparing the Phased Reference Genome
+----------------------------------------------
 
-* **fasta**: https://download.cncb.ac.cn/gwh/Plants/Triticum_aestivum_1_GWHANRF00000000/GWHANRF00000000.genome.fasta.gz
-* **gff**: https://download.cncb.ac.cn/gwh/Plants/Triticum_aestivum_1_GWHANRF00000000/GWHANRF00000000.gff.gz
+Step 1.1: Download the Phased Assembly
+***************************************
 
-The chromosome names are not so nice, so we will rename them:
+Download the two haplotype assemblies for rice cultivar Nipponbare:
 
-* e.g. GWHANRF00000001 --> chr1_A
-* e.g. GWHANRF00000002 --> chr1_B
-* e.g. GWHANRF00000003 --> chr1_C
+* **Haplotype 1 (fasta_hap1)**: https://download.cncb.ac.cn/gwh/Plants/Oryza_sativa_Nipponbare-Hap1_GWHEQCR00000000/GWHEQCR00000000.genome.fasta.gz
+* **Haplotype 2 (fasta_hap2)**: https://download.cncb.ac.cn/gwh/Plants/Oryza_sativa_Nipponbare-Hap2_GWHEQCS00000000/GWHEQCS00000000.genome.fasta.gz
 
-Now we are ready to run the syntelog finder pipeline.
+Step 1.2: Download Reference Annotation
+****************************************
 
-Syntelog finder
-***************
+Since the phased assembly lacks gene annotations, we'll use the NIP-T2T assembly annotation and transfer it to our phased assembly using liftoff.
 
-1. Install nextflow and conda
-2. Prepare the params.config file
+Download the following files:
 
-``params/wheatAK58.json``
+* **Reference annotation (gff)**: https://ftp.ebi.ac.uk/pub/databases/ena/wgs/public/2022/20220330/GWHAAZT00000000/GWHAAZT00000000.gff3.gz
+* **Reference genome (fasta)**: http://www.ricesuperpir.com/uploads/common/genome_sequence/NIP-T2T.fa.gz
 
-.. code-block:: json
+Step 1.3: Rename Chromosomes
+*****************************
 
-   {
-     "reference_fasta": "/scratch/nadjafn/LR_DESIREE_PAPER/ANALYSIS/wheat_example/genome/GWHANRF00000000.renamed.fasta",
-     "reference_gff": "/scratch/nadjafn/LR_DESIREE_PAPER/ANALYSIS/wheat_example/genome/GWHANRF00000000.renamed.gff",
-     "ploidy": 3,
-     "outdir": "/DKED/scratch/nadjafn/potato-allelic-orthogroups/output_wheat"
-   }
+Before running liftoff, rename the chromosomes in both the fasta and gff files from the phased assembly to match this pattern:
+
+**Haplotype 1:**
+
+* GWHEQCR00000001 → chr1_1
+* GWHEQCR00000002 → chr2_1
+* ... (continue for all 12 chromosomes)
+
+**Haplotype 2:**
+
+* GWHEQCS00000001 → chr1_2
+* GWHEQCS00000002 → chr2_2
+* ... (continue for all 12 chromosomes)
+
+Part 2: Transferring Annotations with Liftoff
+----------------------------------------------
+
+Step 2.1: Run Liftoff
+*********************
+
+Create a feature types file and run liftoff for both haplotypes:
 
 .. code-block:: bash
 
-   nextflow run main.nf -resume -params-file params/wheatAK58.json -c conf/nextflow.config -profile conda -bg
+    # Create feature types file
+    echo -e "gene\nmRNA\nexon\nCDS\nfive_prime_UTR\nthree_prime_UTR" > $WORK_DIR/liftoff/feature_types.txt
 
-Why ploidy 3? It is a hexaploid species but we only have A, B and D subgenomes.
+    # Define chromosomes array
+    chromosomes=(1 2 3 4 5 6 7 8 9 10 11 12)
 
-Results
--------
+    # Process each haplotype
+    for haplotype in 1 2 ; do
+        # Create chromosome mapping file
+        chr_map_file="$WORK_DIR/liftoff/chr_map_${haplotype}.csv"
+        > $chr_map_file
 
-The main output we are interested in is the ``syntelogfinder/output_wheat/03_GENESPACE`` directory, which contains these three files:
+        for chr in ${chromosomes[@]}; do
+            echo $chr
+            echo -e "Chr${chr},chr${chr}_${haplotype}" >> $chr_map_file
+        done
 
-* ``GWHANRF00000000.renamed_genespace.pie_chart.svg``
+        # Run liftoff
+        liftoff -g $WORK_DIR/genome/NIP-T2T.gff3 \
+                -o $WORK_DIR/liftoff/Hap${haplotype}.genome.gff \
+                -f $WORK_DIR/liftoff/feature_types.txt \
+                -chroms $chr_map_file \
+                -p 16 \
+                -a 0.9 \
+                -s 0.9 \
+                -copies \
+                $WORK_DIR/genome/Hap${haplotype}_GWHEQC.genome.renamed.fasta \
+                $WORK_DIR/genome/NIP-T2T.fa
+    done
 
-.. figure:: /_static/images/tutorial/GWHANRF00000000.renamed_genespace_pie_chart.svg
+**Parameters explained:**
+
+* ``-p 16``: Use 16 CPU cores
+* ``-a 0.9``: Minimum alignment coverage of 90%
+* ``-s 0.9``: Minimum sequence similarity of 90%
+
+Step 2.2: Add Haplotype Suffixes to Gene IDs
+*********************************************
+
+To avoid duplicate gene IDs between haplotypes, add suffixes to the gene IDs in each gff file:
+
+**Haplotype 1:**
+
+* AGIS_Os01g000010 → AGIS_Os01g000010_hap1
+
+**Haplotype 2:**
+
+* AGIS_Os01g000010 → AGIS_Os01g000010_hap2
+
+Step 2.3: Merge Haplotype Files
+********************************
+
+Combine the fasta and gff files from both haplotypes:
+
+.. code-block:: bash
+
+    # Merge gff files
+    cat $WORK_DIR/liftoff/Hap1.genome.renamed.gff \
+        $WORK_DIR/liftoff/Hap2.genome.renamed.gff \
+        > $WORK_DIR/liftoff/Hap1_2_Nipponbare.genome.renamed.gff
+
+    # Merge fasta files
+    cat $WORK_DIR/genome/Hap1_GWHEQC.genome.renamed.fasta \
+        $WORK_DIR/genome/Hap2_GWHEQC.genome.renamed.fasta \
+        > $WORK_DIR/genome/Hap1_2_Nipponbare.renamed.fasta
+
+Part 3: Running the Syntelog Finder Pipeline
+---------------------------------------------
+
+Step 3.1: Prerequisites
+***********************
+
+1. Install Nextflow
+2. Install Conda
+3. Clone the syntelogsfinder repository (https://github.com/NIB-SI/syntelogfinder)
+
+Step 3.2: Configure Parameters
+*******************************
+
+Create a parameters file at ``params/rice.json``:
+
+.. code-block:: json
+
+    {
+        "reference_fasta": "genome/Hap1_2_Nipponbare.renamed.fasta",
+        "reference_gff": "liftoff/Hap1_2_Nipponbare.genome.renamed.gff",
+        "ploidy": 2,
+        "outdir": "output_rice_Nip"
+    }
+
+Step 3.3: Execute the Pipeline
+*******************************
+
+Run the syntelog finder pipeline:
+
+.. code-block:: bash
+
+    nextflow run main.nf \
+        -params-file params/rice.json \
+        -c conf/nextflow.config \
+        -profile conda
+
+Step 3.4: Understanding the Results
+************************************
+
+The main outputs are located in ``output_rice_Nip/03_GENESPACE/``:
+
+**1. Pie Chart** (``Hap1_2_Nipponbare.genome.renamed_genespace_pie_chart.svg``)
+
+Shows the distribution of syntelog categories.
+
+.. figure:: /_static/images/tutorial/Hap1_2_Nipponbare.genome.renamed_genespace_pie_chart.svg
    :width: 100%
    :align: center
    :alt: Syntelog categories pie chart
 
-* ``GWHANRF00000000.renamed_genespace_combined_barplots.svg``
+**2. Combined Bar Plots** (``Hap1_2_Nipponbare.genome.renamed_genespace_combined_barplots.svg``)
 
-.. figure:: /_static/images/tutorial/GWHANRF00000000.renamed_genespace_combined_barplots.svg
+Displays detailed statistics for each syntelog category. Exon lengths should be very similar between gene pairs since we used lifted annotations.
+
+.. figure:: /_static/images/tutorial/Hap1_2_Nipponbare.genome.renamed_genespace_combined_barplots.svg
    :width: 100%
    :align: center
    :alt: Syntelog categories combined bar plots
 
-We can see here that the exon lengths are very different between the genes in the 1hapA_1hapB_1hapD_s synteny category, but the exon lengths are more similar within each haplotype, with most of them having the same lengths.
+Part 4: Long-Read RNA-Seq Analysis (Optional)
+----------------------------------------------
 
-.. figure:: /_static/images/tutorial/wheat_example_different_UTRlengths.png
-   :width: 70%
-   :align: center
-   :alt: Different UTR lengths
+Step 4.1: Clone the Pipeline
+*****************************
 
+.. code-block:: bash
 
+    git clone https://github.com/nadjano/longrnaseq
 
-So to avoid any bias in read mapping to the longest haplotype (if on the other haplotypes the transcript is too short) we will modify the gff3 file to "chop" the UTRs off that more transcripts have the same length.
+Step 4.2: Download RNA-Seq Data
+********************************
 
+Download the six RNA-seq samples from NCBI:
 
-longrnaseq
-***************
+**Dataset:** `SRP576785 <https://www.ncbi.nlm.nih.gov/Traces/study/?acc=SRP576785&o=lep_sam_s%3Aa&s=SRR32998145,SRR32998146,SRR32998137,SRR32998141,SRR32998142,SRR32998143>`_
 
-Prepare the ``assets/sample.csv`` file:
+**Samples:**
+
+* Three from "Early" tillering stage: SRR32998145, SRR32998146, SRR32998137
+* Three from "Late" tillering stage: SRR32998141, SRR32998142, SRR32998143
+
+Place all fastq files in the ``fastq/`` directory.
+
+Step 4.3: Prepare Sample Sheet
+*******************************
+
+Create ``assets/sample.csv``:
+
 .. code-block:: csv
-    sample,fastq_1
-    SRR33004955,fastq/SRR33004955.fastq
-    SRR33004956,fastq/SRR33004956.fastq
-    SRR33004957,fastq/SRR33004957.fastq
-    SRR33004958,fastq/SRR33004958.fastq
 
-The wheat is very large so we need to use the option ``--large_genome`` to choose the right mapping options.
+    sample,fastq_1
+    SRR32998137,fastq/SRR32998137.fastq
+    SRR32998141,fastq/SRR32998141.fastq
+    SRR32998142,fastq/SRR32998142.fastq
+    SRR32998143,fastq/SRR32998143.fastq
+    SRR32998145,fastq/SRR32998145.fastq
+    SRR32998146,fastq/SRR32998146.fastq
+
+Step 4.4: Add Organellar Genomes
+*********************************
+
+**Important:** Add organellar sequences (mitochondria and chloroplast) to your reference genome to prevent misalignment of organellar transcripts to the nuclear genome.
+
+Download organellar genomes from: https://www.ncbi.nlm.nih.gov/datasets/organelle/
+
+Append these sequences to your reference fasta and add corresponding annotations to your gtf file.
+
+Step 4.5: Run the Pipeline
+***************************
 
 .. code-block:: bash
 
     nextflow run main.nf -resume -profile singularity \
-                        --input assets/samplesheet_AK58.csv \
-                        --outdir output_wheat_AK58 \
-                        --fasta genome/GWHANRF00000000.renamed.fasta \
-                        --gtf  GWHANRF00000000.renamed.cds2exon.gtf \
-                        --centrifuge_db centrifuge/dbs_v2018/ \
-                        --sqanti_dir sqanti3/release_sqanti3 \
-                        --sqanti_test -bg --technology PacBio --large_genome
+        --input assets/sample.csv \
+        --outdir output_rice_Nip \
+        --genome genome/Hap1_2_Nipponbare.renamed.organels.fasta \
+        --gtf genome/Hap1_2_Nipponbare.genome.renamed.organels.standard.gtf \
+        --centrifuge_db centrifuge/dbs_v2018/ \
+        --sqanti_dir sqanti3/release_sqanti3 \
+        --bg \
+        --technology ONT \
+        --skip_sqanti
+
+.. note::
+   The ``--skip_sqanti`` flag is used here; see https://github.com/nadjano/longrnaseq for additional details on SQANTI configuration.
+
+**Expected runtime:** Approximately 4 hours on a server with 60 CPU cores and 200 GB RAM (runtime varies based on fastq file size and available resources).
+
+Troubleshooting & Tips
+----------------------
+
+* **Chromosome naming:** Ensure consistent chromosome naming throughout all files
+* **Gene ID conflicts:** Always add haplotype suffixes to prevent duplicate IDs
+* **Resource requirements:** The longrnaseq pipeline is resource-intensive; adjust CPU/memory accordingly
+* **Organellar sequences:** Including organellar genomes significantly improves alignment accuracy
+
+Additional Resources
+--------------------
+
+* For more information on SQANTI and transcript quality control, visit the longrnaseq repository
+* Adjust alignment parameters in liftoff if you have lower-quality assemblies or more divergent references
