@@ -2,7 +2,7 @@
 ![potatoesaregreat](polyase_diagramm.png)
 # Polyase
 
-A Python package for analyzing allele-specific expression in polyploid plants.
+A Python package for analyzing allele-specific expression in polyploid organisms.
 
 ## Installation
 
