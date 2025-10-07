@@ -172,7 +172,7 @@ The main outputs are located in ``output_rice_Nip/03_GENESPACE/``:
 Shows the distribution of syntelog categories.
 
 .. figure:: /_static/images/tutorial/Hap1_2_Nipponbare.genome.renamed_genespace_pie_chart.svg
-   :width: 100%
+   :width: 70%
    :align: center
    :alt: Syntelog categories pie chart
 
@@ -185,8 +185,8 @@ Displays detailed statistics for each syntelog category. Exon lengths should be 
    :align: center
    :alt: Syntelog categories combined bar plots
 
-Part 4: Long-Read RNA-Seq Analysis (Optional)
-----------------------------------------------
+Part 4: Long-Read RNA-Seq Analysis
+----------------------------------
 
 Step 4.1: Clone the Pipeline
 *****************************
@@ -254,16 +254,10 @@ Step 4.5: Run the Pipeline
 
 **Expected runtime:** Approximately 4 hours on a server with 60 CPU cores and 200 GB RAM (runtime varies based on fastq file size and available resources).
 
-Troubleshooting & Tips
-----------------------
 
-* **Chromosome naming:** Ensure consistent chromosome naming throughout all files
-* **Gene ID conflicts:** Always add haplotype suffixes to prevent duplicate IDs
-* **Resource requirements:** The longrnaseq pipeline is resource-intensive; adjust CPU/memory accordingly
-* **Organellar sequences:** Including organellar genomes significantly improves alignment accuracy
 
-Additional Resources
---------------------
+Troubleshooting
+****************
 
-* For more information on SQANTI and transcript quality control, visit the longrnaseq repository
-* Adjust alignment parameters in liftoff if you have lower-quality assemblies or more divergent references
+long-rnaseq pipeline issues:
+* BAMBU: gene_ids in the gtf file are essential for BAMBU to work correctly. Ensure that your gtf file contains gene_id attributes for each transcript.

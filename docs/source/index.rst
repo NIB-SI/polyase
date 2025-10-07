@@ -31,6 +31,7 @@ documentation for details.
 
    tutorial
    tutorial_rice
+   rice_polyase
 
 .. toctree::
    :maxdepth: 2
