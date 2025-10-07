@@ -30,6 +30,7 @@ documentation for details.
    :caption: Tutorial:
 
    tutorial
+   tutorial_rice
 
 .. toctree::
    :maxdepth: 2
