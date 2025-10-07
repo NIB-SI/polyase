@@ -261,3 +261,10 @@ Troubleshooting
 
 long-rnaseq pipeline issues:
 * BAMBU: gene_ids in the gtf file are essential for BAMBU to work correctly. Ensure that your gtf file contains gene_id attributes for each transcript.
+
+
+
+.. toctree::
+   :maxdepth: 2
+
+   rice_polyase
