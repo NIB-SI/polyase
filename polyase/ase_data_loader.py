@@ -260,20 +260,55 @@ def load_ase_data(
         else:
             max_synt_id = 0
 
-        # Assign unique Synt_ids to transcripts without them
+        # Assign Synt_ids per gene for transcripts without them
         missing_synt_mask = isoform_var['Synt_id'].isna()
-        n_missing = missing_synt_mask.sum()
-
-        if n_missing > 0:
-            # Assign sequential IDs starting from max_synt_id + 1
-            new_synt_ids = range(max_synt_id + 1, max_synt_id + 1 + n_missing)
-            isoform_var.loc[missing_synt_mask, 'Synt_id'] = list(new_synt_ids)
-
-            print(f"Assigned new Synt_id values {max_synt_id + 1} to {max_synt_id + n_missing} for {n_missing} transcripts")
+        
+        if missing_synt_mask.sum() > 0:
+            # Group transcripts without Synt_id by gene_id
+            missing_transcripts = isoform_var[missing_synt_mask].copy()
+            
+            # Get unique genes that need Synt_id assignment
+            unique_genes_needing_synt = missing_transcripts['gene_id'].dropna().unique()
+            n_genes = len(unique_genes_needing_synt)
+            
+            # Create mapping from gene_id to new Synt_id
+            gene_to_new_synt_id = {}
+            for i, gene_id in enumerate(unique_genes_needing_synt):
+                gene_to_new_synt_id[gene_id] = max_synt_id + 1 + i
+            
+            # Assign Synt_ids based on gene_id
+            for idx in missing_transcripts.index:
+                gene_id = isoform_var.loc[idx, 'gene_id']
+                if pd.notna(gene_id) and gene_id in gene_to_new_synt_id:
+                    isoform_var.loc[idx, 'Synt_id'] = gene_to_new_synt_id[gene_id]
+                else:
+                    # If gene_id is missing, assign a unique Synt_id for this transcript
+                    max_synt_id += 1
+                    isoform_var.loc[idx, 'Synt_id'] = max_synt_id
+                    max_synt_id = max(max_synt_id, max(gene_to_new_synt_id.values())) if gene_to_new_synt_id else max_synt_id
+            
+            print(f"Assigned Synt_id values for {n_genes} genes ({missing_synt_mask.sum()} transcripts)")
+            if missing_transcripts['gene_id'].isna().sum() > 0:
+                print(f"  - {missing_transcripts['gene_id'].isna().sum()} transcripts without gene_id received unique Synt_ids")
     else:
-        # If Synt_id column doesn't exist, create it with unique IDs for all transcripts
-        print("Creating Synt_id column with unique IDs for all transcripts")
-        isoform_var['Synt_id'] = range(1, len(isoform_var) + 1)
+        # If Synt_id column doesn't exist, create it based on gene_id
+        print("Creating Synt_id column based on gene_id")
+        
+        # Group transcripts by gene_id and assign sequential Synt_ids
+        unique_genes = isoform_var['gene_id'].dropna().unique()
+        gene_to_synt_id = {gene: idx + 1 for idx, gene in enumerate(unique_genes)}
+        
+        # Assign Synt_ids based on gene_id
+        isoform_var['Synt_id'] = isoform_var['gene_id'].map(gene_to_synt_id)
+        
+        # Handle transcripts without gene_id
+        missing_gene_mask = isoform_var['gene_id'].isna()
+        if missing_gene_mask.sum() > 0:
+            max_synt_id = len(unique_genes)
+            for idx in isoform_var[missing_gene_mask].index:
+                max_synt_id += 1
+                isoform_var.loc[idx, 'Synt_id'] = max_synt_id
+            print(f"  - {missing_gene_mask.sum()} transcripts without gene_id received unique Synt_ids")
 
     # Keep ALL transcripts (no filtering based on var_obs matches)
     print(f"Keeping all {len(isoform_var)} transcripts from expression data")
