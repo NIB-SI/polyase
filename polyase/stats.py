@@ -896,35 +896,54 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
 def _calculate_combined_structure_similarity(
     exon_structure1, exon_structure2,
     intron_structure1=None, intron_structure2=None,
-    exon_weight=0.6, intron_weight=0.4
+    exon_weight=0.6, intron_weight=0.4,
+    length_tolerance=10  # base pairs tolerance for length comparison
 ):
-    """Calculate combined similarity using both exon and intron structures."""
+    """
+    Calculate combined similarity using both exon and intron structures.
+    
+    Similarity is based on:
+    - Whether the number of exons is the same
+    - Similarity of corresponding exon lengths (with tolerance)
+    - Similarity of corresponding intron lengths (with tolerance)
+    
+    Parameters
+    ----------
+    exon_structure1, exon_structure2 : list of int
+        Exon lengths as [length1, length2, ...]
+    intron_structure1, intron_structure2 : list of int or int, optional
+        Intron lengths as [length1, length2, ...] or single int
+    exon_weight : float, default=0.6
+        Weight for exon similarity in combined score
+    intron_weight : float, default=0.4
+        Weight for intron similarity in combined score
+    length_tolerance : int, default=10
+        Base pair tolerance for length similarity (bp difference that doesn't reduce similarity)
+    
+    Returns
+    -------
+    float
+        Combined similarity score between 0 and 1
+    """
     if not exon_structure1 or not exon_structure2:
         return 0.0
     
-    # Calculate exon similarity
-    exon_set1 = set(exon_structure1)
-    exon_set2 = set(exon_structure2)
-    
-    if exon_set1 or exon_set2:
-        exon_intersection = len(exon_set1 & exon_set2)
-        exon_union = len(exon_set1 | exon_set2)
-        exon_sim = exon_intersection / exon_union if exon_union > 0 else 0.0
-    else:
-        exon_sim = 0.0
+    # Calculate exon similarity based on count and lengths
+    exon_sim = _calculate_length_based_similarity(
+        exon_structure1, exon_structure2, length_tolerance
+    )
     
     # Calculate intron similarity if available
-    if intron_structure1 and intron_structure2:
-        intron_set1 = set(intron_structure1)
-        intron_set2 = set(intron_structure2)
-        
-        if intron_set1 or intron_set2:
-            intron_intersection = len(intron_set1 & intron_set2)
-            intron_union = len(intron_set1 | intron_set2)
-            intron_sim = intron_intersection / intron_union if intron_union > 0 else 0.0
-        else:
-            intron_sim = 0.0
-        
+    if intron_structure1 is not None and intron_structure2 is not None:
+        # Convert single int to list for consistency
+        if isinstance(intron_structure1, (int, float)):
+            intron_structure1 = [intron_structure1]
+        if isinstance(intron_structure2, (int, float)):
+            intron_structure2 = [intron_structure2]
+            
+        intron_sim = _calculate_length_based_similarity(
+            intron_structure1, intron_structure2, length_tolerance
+        )
         combined_sim = exon_weight * exon_sim + intron_weight * intron_sim
     else:
         combined_sim = exon_sim
@@ -932,12 +951,100 @@ def _calculate_combined_structure_similarity(
     return combined_sim
 
 
+def _calculate_length_based_similarity(lengths1, lengths2, tolerance=10):
+    """
+    Calculate similarity between two genomic structures based on element counts and lengths.
+    
+    Parameters
+    ----------
+    lengths1, lengths2 : list of int
+        Lengths of genomic elements (exons or introns)
+    tolerance : int, default=10
+        Base pair tolerance for length comparison
+    
+    Returns
+    -------
+    float
+        Similarity score between 0 and 1
+    """
+    if not lengths1 or not lengths2:
+        return 0.0
+    
+    # Ensure we're working with lists
+    if not isinstance(lengths1, list):
+        lengths1 = [lengths1]
+    if not isinstance(lengths2, list):
+        lengths2 = [lengths2]
+    
+    # Component 1: Check if the number of elements is the same
+    count1 = len(lengths1)
+    count2 = len(lengths2)
+    
+    # Penalize heavily for different counts
+    if count1 != count2:
+        count_similarity = 1.0 - abs(count1 - count2) / max(count1, count2)
+        # If counts differ significantly, return low similarity
+        if count_similarity < 0.5:
+            return count_similarity * 0.5  # Max 0.25 if counts differ a lot
+    else:
+        count_similarity = 1.0
+    
+    # Component 2: Calculate length similarity for corresponding elements
+    # Sort lengths to compare corresponding elements by size
+    lengths1_sorted = sorted(lengths1)
+    lengths2_sorted = sorted(lengths2)
+    
+    # Compare corresponding lengths (pair shortest with shortest, etc.)
+    n_comparisons = min(len(lengths1_sorted), len(lengths2_sorted))
+    
+    if n_comparisons == 0:
+        return 0.0
+    
+    length_similarities = []
+    for i in range(n_comparisons):
+        len1 = lengths1_sorted[i]
+        len2 = lengths2_sorted[i]
+        
+        # Calculate absolute difference
+        diff = abs(len1 - len2)
+        
+        # Apply tolerance: differences within tolerance have no penalty
+        if diff <= tolerance:
+            similarity = 1.0
+        else:
+            # Calculate similarity based on relative difference beyond tolerance
+            adjusted_diff = diff - tolerance
+            avg_length = (len1 + len2) / 2
+            # Use exponential decay for penalty to avoid harsh drops
+            similarity = max(0.0, 1.0 - (adjusted_diff / avg_length))
+        
+        length_similarities.append(similarity)
+    
+    # Average length similarity
+    avg_length_similarity = sum(length_similarities) / n_comparisons
+    
+    # Penalize for extra elements (if counts differ)
+    if count1 != count2:
+        extra_elements = abs(count1 - count2)
+        penalty = extra_elements / max(count1, count2) * 0.2  # 20% penalty per extra element
+        avg_length_similarity *= (1 - penalty)
+    
+    # Combine count and length similarity
+    # Give more weight to length similarity if counts match
+    if count1 == count2:
+        final_similarity = 0.2 * count_similarity + 0.8 * avg_length_similarity
+    else:
+        final_similarity = 0.5 * count_similarity + 0.5 * avg_length_similarity
+    
+    return final_similarity
+
 def _identify_major_minor_isoforms(
     synt_indices, haplotypes, transcript_ids,
     exon_lengths_dict, intron_lengths_dict,
     counts, condition_indices, verbose=False
 ):
     """Identify the reference haplotype and its major/minor isoforms."""
+    import numpy as np
     synt_haplotypes = haplotypes.iloc[synt_indices]
     unique_haplotypes = synt_haplotypes.dropna().unique()
     
@@ -997,6 +1104,7 @@ def _match_isoforms_across_haplotypes(
     verbose=False
 ):
     """Match major and minor isoforms across all haplotypes."""
+    import numpy as np
     haplotype_matches = {}
     
     for hap in unique_haplotypes:
@@ -1123,6 +1231,13 @@ def test_differential_isoform_structure(
         If return_plotting_data=True: returns (results_df, plotting_df)
         If return_plotting_data=False: returns results_df only
     """
+    import pandas as pd
+    import numpy as np
+    import re
+    from statsmodels.stats.multitest import multipletests
+    from isotools._transcriptome_stats import betabinom_lr_test
+    from anndata import AnnData
+    
     if not isinstance(adata, AnnData):
         raise ValueError("Input must be an AnnData object")
     
