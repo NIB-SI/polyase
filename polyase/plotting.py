@@ -341,8 +341,8 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
         # Get stats for this syntelog
         p_value = synt_data['p_value'].min()
         fdr = synt_data['FDR'].min() if 'FDR' in synt_data.columns else np.nan
-        ratio_difference = (synt_data.loc[synt_data['FDR'] < sig_threshold, 'ratio_difference'].max() 
-                          if ('ratio_difference' in synt_data.columns and 'FDR' in synt_data.columns) 
+        ratio_difference = (synt_data.loc[synt_data['FDR'] < sig_threshold, 'ratio_difference'].max()
+                          if ('ratio_difference' in synt_data.columns and 'FDR' in synt_data.columns)
                           else np.nan)
 
         # Handle exploding columns with different lengths properly
@@ -439,7 +439,7 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
 
         # Determine title components
         fdr_text = f", FDR={fdr:.2e}" if not np.isnan(fdr) else ""
-        
+
         # Determine if this syntelog has a significant difference
         is_significant = False
         if 'FDR' in synt_data.columns and not np.isnan(fdr):
@@ -448,7 +448,7 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
             is_significant = p_value <= sig_threshold
 
         title_color = sig_color if is_significant else 'black'
-        
+
         # Get functional annotation
         function_annotation_text = "NA"
         if 'functional_annotation' in synt_data_melted.columns:
@@ -457,7 +457,7 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
                 function_annotation_text = str(function_annotation)[:20]  # Shorten long descriptions
 
         transcript_id = synt_data_melted['transcript_id'].iloc[0]
-        
+
         # Set title with stats and color based on significance
         ax.set_title(f"{transcript_id}\n{function_annotation_text}{fdr_text}", color=title_color)
         ax.set_xlabel('Allele')
@@ -1072,13 +1072,13 @@ def plot_differential_isoform_usage(
     # Detect the layer being used by looking for columns ending with '_cpm'
     layer = None
     layer_cpm_col = None
-    
+
     for col in results_df.columns:
         if col.endswith('_cpm'):
             layer_cpm_col = col
             layer = col.replace('_cpm', '')
             break
-    
+
     if layer is None:
         # Fallback to looking for 'unique_counts_cpm' for backward compatibility
         if 'unique_counts_cpm' in results_df.columns:
@@ -1086,7 +1086,7 @@ def plot_differential_isoform_usage(
             layer_cpm_col = 'unique_counts_cpm'
         else:
             raise ValueError("No CPM column found. Expected column ending with '_cpm'")
-    
+
     print(f"Detected layer: {layer} (using column: {layer_cpm_col})")
 
     # Validate required columns
@@ -1124,8 +1124,8 @@ def plot_differential_isoform_usage(
     # Create dynamic subplot titles based on detected layer
     layer_display_name = layer.replace('_', ' ').title()
     subplot_titles = [
-        "Transcript Structure", 
-        f"CPM ({layer_display_name})", 
+        "Transcript Structure",
+        f"CPM ({layer_display_name})",
         "Isoform Usage Ratio"
     ]
 
@@ -1277,7 +1277,7 @@ def plot_allele_specific_isoform_structure(
     # Detect the layer being used by looking for columns with count data
     layer = None
     layer_counts_col = None
-    
+
     # Look for various count column patterns
     count_patterns = ['_cpm', '_counts', '_raw']
     for pattern in count_patterns:
@@ -1293,7 +1293,7 @@ def plot_allele_specific_isoform_structure(
                 break
         if layer is not None:
             break
-    
+
     # Fallback to looking for 'isoform_counts' for backward compatibility
     if layer is None:
         if 'isoform_counts' in results_df.columns:
@@ -1301,7 +1301,7 @@ def plot_allele_specific_isoform_structure(
             layer_counts_col = 'isoform_counts'
         else:
             raise ValueError("No count column found. Expected column with pattern '_cpm', '_counts', or '_raw', or 'isoform_counts'")
-    
+
     print(f"Detected layer: {layer} (using column: {layer_counts_col})")
 
     # Validate required columns
@@ -1328,7 +1328,7 @@ def plot_allele_specific_isoform_structure(
 
     # Create dynamic subplot titles based on detected layer
     layer_display_name = layer.replace('_', ' ').title()
-    
+
     # Determine the type of data based on column pattern
     if layer_counts_col.endswith('_cpm'):
         data_type = f"CPM ({layer_display_name})"
@@ -1338,10 +1338,10 @@ def plot_allele_specific_isoform_structure(
         data_type = f"Counts ({layer_display_name})"
     else:
         data_type = f"Counts ({layer_display_name})"  # Default
-    
+
     subplot_titles = [
-        "Transcript Structure", 
-        data_type, 
+        "Transcript Structure",
+        data_type,
         "Isoform Usage Ratio"
     ]
 
@@ -1399,6 +1399,8 @@ def plot_allele_specific_isoform_structure(
                 target_gene=gene
             )
 
+            sod1_annotation = RNApy.shorten_gaps(sod1_annotation)
+
             # Create traces
             traces = RNApy.make_traces(
                 annotation=sod1_annotation,
@@ -1411,6 +1413,8 @@ def plot_allele_specific_isoform_structure(
                 expression_hue="haplotype",
                 marker_size=2
             )
+
+            
 
             # Create figure with dynamic subplot titles
             fig = RNApy.make_plot(
@@ -1447,5 +1451,3 @@ def plot_allele_specific_isoform_structure(
 
     print(f"Generated {len(figures)} plots for allele-specific isoform structure")
     return figures
-
-
