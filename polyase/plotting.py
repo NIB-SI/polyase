@@ -1390,7 +1390,13 @@ def plot_allele_specific_isoform_structure(
         counts_matrix_gene['sample_id'] = counts_matrix_gene['sample']
         counts_matrix_gene['counts'] = counts_matrix_gene[layer_counts_col].astype(float)
         counts_matrix_gene = pl.from_pandas(counts_matrix_gene)
-
+        # for rows where isoform_ratio is 0.0, set to None
+        counts_matrix_gene = counts_matrix_gene.with_columns([
+            pl.when(pl.col("isoform_ratio") == 0.0)
+            .then(None)
+            .otherwise(pl.col("isoform_ratio"))
+            .alias("isoform_ratio")
+        ])
         try:
             # Filter annotation and counts matrix
             sod1_annotation, sod1_counts_matrix = RNApy.gene_filtering(
@@ -1399,7 +1405,8 @@ def plot_allele_specific_isoform_structure(
                 target_gene=gene
             )
 
-            sod1_annotation = RNApy.shorten_gaps(sod1_annotation)
+            #sod1_annotation = RNApy.shorten_gaps(sod1_annotation)
+            # This is not working
 
             # Create traces
             traces = RNApy.make_traces(

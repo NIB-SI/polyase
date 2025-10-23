@@ -10,8 +10,7 @@ Add your content using ``reStructuredText`` syntax. See the
 `reStructuredText <https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html>`_
 documentation for details.
 
-.. automodule:: polyase.stats
-    :members:
+
 
 .. toctree::
    :maxdepth: 2
@@ -25,12 +24,16 @@ documentation for details.
 
    examples
 
+.. automodule:: polyase.stats
+    :members:
+
 .. toctree::
    :maxdepth: 2
    :caption: Tutorial:
 
    tutorial
    tutorial_rice
+   tutorial_potato
 
 .. toctree::
    :maxdepth: 2

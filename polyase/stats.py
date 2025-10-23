@@ -892,151 +892,586 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
 
 
 
-
-def _calculate_combined_structure_similarity(
-    exon_structure1, exon_structure2,
-    intron_structure1=None, intron_structure2=None,
-    exon_weight=0.6, intron_weight=0.4,
-    length_tolerance=10  # base pairs tolerance for length comparison
+def test_differential_isoform_structure(
+    adata, layer="unique_counts", test_condition="control",
+    min_similarity_for_matching=0.9,
+    use_introns=True,
+    exon_weight=0.6,
+    intron_weight=0.4,
+    inplace=True, 
+    verbose=False,
+    return_plotting_data=True
 ):
     """
-    Calculate combined similarity using both exon and intron structures.
+    Test for DIU between alleles with intelligent major/minor isoform fallback.
     
-    Similarity is based on:
-    - Whether the number of exons is the same
-    - Similarity of corresponding exon lengths (with tolerance)
-    - Similarity of corresponding intron lengths (with tolerance)
-    
-    Parameters
-    ----------
-    exon_structure1, exon_structure2 : list of int
-        Exon lengths as [length1, length2, ...]
-    intron_structure1, intron_structure2 : list of int or int, optional
-        Intron lengths as [length1, length2, ...] or single int
-    exon_weight : float, default=0.6
-        Weight for exon similarity in combined score
-    intron_weight : float, default=0.4
-        Weight for intron similarity in combined score
-    length_tolerance : int, default=10
-        Base pair tolerance for length similarity (bp difference that doesn't reduce similarity)
+    IMPROVED VERSION:
+    - Includes isoforms in plotting data even if they have zero expression in reference haplotype
+    - Matches zero-expressed reference isoforms with corresponding isoforms in other haplotypes
     
     Returns
     -------
-    float
-        Combined similarity score between 0 and 1
+    tuple or pd.DataFrame
+        If return_plotting_data=True: returns (results_df, plotting_df)
+        If return_plotting_data=False: returns results_df only
     """
-    if not exon_structure1 or not exon_structure2:
-        return 0.0
+    import pandas as pd
+    import numpy as np
+    import re
+    from statsmodels.stats.multitest import multipletests
+    from isotools._transcriptome_stats import betabinom_lr_test
+    from anndata import AnnData
     
-    # Calculate exon similarity based on count and lengths
-    exon_sim = _calculate_length_based_similarity(
-        exon_structure1, exon_structure2, length_tolerance
-    )
+    if not isinstance(adata, AnnData):
+        raise ValueError("Input must be an AnnData object")
     
-    # Calculate intron similarity if available
-    if intron_structure1 is not None and intron_structure2 is not None:
-        # Convert single int to list for consistency
-        if isinstance(intron_structure1, (int, float)):
-            intron_structure1 = [intron_structure1]
-        if isinstance(intron_structure2, (int, float)):
-            intron_structure2 = [intron_structure2]
-            
-        intron_sim = _calculate_length_based_similarity(
-            intron_structure1, intron_structure2, length_tolerance
+    if layer not in adata.layers:
+        raise ValueError(f"Layer '{layer}' not found")
+    
+    required_cols = ['Synt_id', 'haplotype']
+    for col in required_cols:
+        if col not in adata.var.columns:
+            raise ValueError(f"Required column '{col}' not found in adata.var")
+    
+    if 'exon_lengths' not in adata.uns:
+        raise ValueError("'exon_lengths' not found in adata.uns. Run add_exon_structure() first")
+    
+    if use_introns and 'intron_lengths' not in adata.uns:
+        print("Warning: use_introns=True but 'intron_lengths' not found. Using only exon structures")
+        use_introns = False
+    
+    if not inplace:
+        adata = adata.copy()
+    
+    counts = adata.layers[layer]
+    synt_ids = adata.var["Synt_id"]
+    haplotypes = adata.var["haplotype"]
+    transcript_ids = adata.var_names
+    exon_lengths_dict = adata.uns['exon_lengths']
+    intron_lengths_dict = adata.uns.get('intron_lengths', {}) if use_introns else {}
+    gene_ids = adata.var.get("gene_id", pd.Series([None] * len(adata.var), index=adata.var_names))
+    
+    if test_condition == "all":
+        condition_indices = np.arange(counts.shape[0])
+        condition_values = adata.obs['condition'].values
+    else:
+        if 'condition' not in adata.obs.columns:
+            raise ValueError("'condition' not found in adata.obs")
+        condition_indices = np.where(adata.obs['condition'] == test_condition)[0]
+        condition_values = [test_condition] * len(condition_indices)
+    
+    print(f"DEBUG: Found {len(condition_indices)} samples for condition '{test_condition}'")
+    
+    sample_names = adata.obs_names[condition_indices]
+    unique_syntelogs = synt_ids.dropna().unique()
+    unique_syntelogs = unique_syntelogs[unique_syntelogs != 0]
+    
+    print(f"DEBUG: Found {len(unique_syntelogs)} syntelogs to process")
+    
+    results = []
+    plotting_data = []
+    
+    stats = {
+        'total': len(unique_syntelogs),
+        'tested': 0,
+        'comparisons': 0,
+        'major_used': 0,
+        'minor_used': 0,
+        'failed': 0,
+        'fail_reasons': {
+            'no_indices': 0,
+            'single_haplotype': 0,
+            'no_major': 0,
+            'no_matches': 0,
+            'major_not_on_all_no_minor': 0,
+            'no_reference': 0,
+            'zero_counts': 0,
+            'test_error': 0
+        }
+    }
+    
+    if verbose:
+        print(f"Processing {len(unique_syntelogs)} syntelogs with major/minor fallback logic...")
+        print(f"Using {'exon+intron' if use_introns else 'exon-only'} structures")
+    
+    for synt_idx, synt_id in enumerate(unique_syntelogs):
+        if verbose and synt_idx % 100 == 0:
+            print(f"Progress: {synt_idx}/{len(unique_syntelogs)}")
+        
+        synt_mask = synt_ids == synt_id
+        synt_indices = np.where(synt_mask)[0]
+        
+        if len(synt_indices) == 0:
+            stats['fail_reasons']['no_indices'] += 1
+            stats['failed'] += 1
+            continue
+        
+        synt_haplotypes = haplotypes.iloc[synt_indices]
+        unique_haplotypes = synt_haplotypes.dropna().unique()
+        
+        if len(unique_haplotypes) < 2:
+            stats['fail_reasons']['single_haplotype'] += 1
+            stats['failed'] += 1
+            continue
+        
+        if synt_idx < 3:
+            print(f"\nDEBUG Syntelog {synt_id}: {len(unique_haplotypes)} haplotypes, {len(synt_indices)} transcripts")
+        
+        # IMPROVED: Identify ALL isoforms in reference haplotype, not just major/minor
+        reference_haplotype, major_isoform, minor_isoform, all_ref_isoforms = _identify_all_reference_isoforms(
+            synt_indices, haplotypes, transcript_ids,
+            exon_lengths_dict, intron_lengths_dict,
+            counts, condition_indices,
+            verbose=synt_idx < 3
         )
-        combined_sim = exon_weight * exon_sim + intron_weight * intron_sim
+        
+        if not major_isoform:
+            stats['fail_reasons']['no_major'] += 1
+            stats['failed'] += 1
+            continue
+        
+        haplotype_matches = _match_isoforms_across_haplotypes(
+            synt_indices, unique_haplotypes, synt_haplotypes, transcript_ids,
+            exon_lengths_dict, intron_lengths_dict,
+            reference_haplotype, major_isoform, minor_isoform,
+            counts, condition_indices,
+            min_similarity_for_matching=min_similarity_for_matching,
+            verbose=synt_idx < 3
+        )
+        
+        if synt_idx < 3:
+            print(f"DEBUG: Found {len(haplotype_matches)} haplotype matches")
+        
+        if len(haplotype_matches) < 2:
+            stats['fail_reasons']['no_matches'] += 1
+            stats['failed'] += 1
+            continue
+        
+        major_on_all = all(match['matched_isoform_type'] == 'major' for match in haplotype_matches.values())
+        
+        if synt_idx < 3:
+            print(f"DEBUG: Major on all haplotypes: {major_on_all}")
+        
+        if major_on_all:
+            isoform_type_for_testing = 'major'
+            reference_structure_exon = major_isoform['exon_structure']
+            reference_structure_intron = major_isoform['intron_structure']
+            reference_transcript = major_isoform['transcript_id']
+            stats['major_used'] += 1
+        elif minor_isoform:
+            isoform_type_for_testing = 'minor'
+            reference_structure_exon = minor_isoform['exon_structure']
+            reference_structure_intron = minor_isoform['intron_structure']
+            reference_transcript = minor_isoform['transcript_id']
+            stats['minor_used'] += 1
+            
+            filtered_matches = {}
+            for hap, match in haplotype_matches.items():
+                if hap == reference_haplotype:
+                    filtered_matches[hap] = {
+                        'matched_isoform_type': 'minor',
+                        'transcript_id': minor_isoform['transcript_id'],
+                        'transcript_idx': minor_isoform['transcript_idx'],
+                        'exon_structure': minor_isoform['exon_structure'],
+                        'intron_structure': minor_isoform['intron_structure'],
+                        'similarity_to_major': match['similarity_to_major'],
+                        'similarity_to_minor': 1.0,
+                        'expression': minor_isoform.get('expression', 0),
+                        'n_isoforms_in_haplotype': match['n_isoforms_in_haplotype']
+                    }
+                elif match['matched_isoform_type'] == 'minor':
+                    filtered_matches[hap] = match
+            
+            haplotype_matches = filtered_matches
+            
+            if synt_idx < 3:
+                print(f"DEBUG: After filtering for minor, {len(haplotype_matches)} haplotypes remain")
+            
+            if len(haplotype_matches) < 2:
+                stats['fail_reasons']['no_matches'] += 1
+                stats['failed'] += 1
+                continue
+        else:
+            stats['fail_reasons']['major_not_on_all_no_minor'] += 1
+            stats['failed'] += 1
+            continue
+        
+        if synt_idx < 3:
+            print(f"DEBUG: Testing using {isoform_type_for_testing.upper()} isoform")
+        
+        if reference_haplotype not in haplotype_matches:
+            if synt_idx < 3:
+                print(f"DEBUG ERROR: Reference haplotype {reference_haplotype} not in matches!")
+            stats['fail_reasons']['no_reference'] += 1
+            stats['failed'] += 1
+            continue
+        
+        ref_match = haplotype_matches[reference_haplotype]
+        ref_hap_mask = synt_haplotypes == reference_haplotype
+        ref_hap_indices = synt_indices[np.where(ref_hap_mask)[0]]
+        ref_isoform_counts = counts[np.ix_(condition_indices, [ref_match['transcript_idx']])].flatten()
+        ref_hap_totals = np.sum(counts[np.ix_(condition_indices, ref_hap_indices)], axis=1)
+        
+        if synt_idx < 3:
+            print(f"DEBUG: Reference counts: {ref_isoform_counts[:3]}, totals: {ref_hap_totals[:3]}")
+        
+        comparisons_made = 0
+        for other_hap, other_match in haplotype_matches.items():
+            if other_hap == reference_haplotype:
+                continue
+            
+            other_hap_mask = synt_haplotypes == other_hap
+            other_hap_indices = synt_indices[np.where(other_hap_mask)[0]]
+            other_isoform_counts = counts[np.ix_(condition_indices, [other_match['transcript_idx']])].flatten()
+            other_hap_totals = np.sum(counts[np.ix_(condition_indices, other_hap_indices)], axis=1)
+            
+            if np.all(ref_isoform_counts == 0) or np.all(other_isoform_counts == 0):
+                stats['fail_reasons']['zero_counts'] += 1
+                continue
+            if np.all(ref_hap_totals == 0) or np.all(other_hap_totals == 0):
+                stats['fail_reasons']['zero_counts'] += 1
+                continue
+            
+            try:
+                test_result = betabinom_lr_test(
+                    [ref_isoform_counts.astype(int), other_isoform_counts.astype(int)],
+                    [ref_hap_totals.astype(int), other_hap_totals.astype(int)]
+                )
+                p_value = test_result[0]
+                ratio_stats = test_result[1]
+                ratio_difference = abs(ratio_stats[0] - ratio_stats[2])
+            except Exception as e:
+                if synt_idx < 3:
+                    print(f"DEBUG: Error in test: {str(e)}")
+                stats['fail_reasons']['test_error'] += 1
+                continue
+            
+            stats['comparisons'] += 1
+            comparisons_made += 1
+            
+            results.append({
+                'Synt_id': synt_id,
+                'reference_haplotype': reference_haplotype,
+                'comparison_haplotype': other_hap,
+                'reference_transcript': reference_transcript,
+                'comparison_transcript': other_match['transcript_id'],
+                'isoform_type_tested': isoform_type_for_testing,
+                'p_value': p_value,
+                'ratio_difference': ratio_difference,
+                'reference_ratio_mean': ratio_stats[0],
+                'comparison_ratio_mean': ratio_stats[2],
+            })
+        
+        if comparisons_made > 0:
+            stats['tested'] += 1
+        
+        # IMPROVED: Create plotting data that includes ALL isoforms from reference haplotype
+        if return_plotting_data and comparisons_made > 0:
+            gene_id = gene_ids.get(reference_transcript, None)
+            library_sizes = np.sum(counts[condition_indices, :], axis=1)
+            
+            # IMPROVED: Build comprehensive isoform matching for ALL reference isoforms
+            all_haplotype_isoform_matches = _match_all_isoforms_for_plotting(
+                all_ref_isoforms,
+                unique_haplotypes,
+                synt_haplotypes,
+                synt_indices,
+                transcript_ids,
+                exon_lengths_dict,
+                intron_lengths_dict,
+                reference_haplotype,
+                major_isoform,
+                minor_isoform,
+                min_similarity_for_matching=min_similarity_for_matching
+            )
+            
+            # Now generate plotting data for ALL matched isoforms
+            for hap in unique_haplotypes:
+                hap_mask = synt_haplotypes == hap
+                hap_indices = synt_indices[np.where(hap_mask)[0]]
+                
+                if len(hap_indices) == 0:
+                    continue
+                
+                # For each reference isoform, add plotting data
+                for ref_iso in all_ref_isoforms:
+                    ref_iso_id = ref_iso['transcript_id']
+                    ref_iso_rank = ref_iso['rank']  # 'major', 'minor', or 'other'
+                    
+                    # Find matched isoform in this haplotype
+                    matched_info = all_haplotype_isoform_matches.get((hap, ref_iso_id), None)
+                    
+                    if matched_info is not None:
+                        matched_transcript_idx = matched_info['transcript_idx']
+                        matched_transcript_id = matched_info['transcript_id']
+                        similarity = matched_info['similarity']
+                    else:
+                        # No match found - use zeros
+                        matched_transcript_idx = None
+                        matched_transcript_id = ref_iso_id
+                        similarity = 0.0
+                    
+                    # Calculate metrics for each sample
+                    for sample_idx, (cond_idx, samp_name, cond) in enumerate(zip(condition_indices, sample_names, condition_values)):
+                        hap_total = np.sum(counts[cond_idx, hap_indices])
+                        
+                        if matched_transcript_idx is not None:
+                            iso_counts = counts[cond_idx, matched_transcript_idx]
+                            iso_ratio = iso_counts / hap_total if hap_total > 0 else 0.0
+                            lib_size = library_sizes[sample_idx]
+                            iso_cpm = (iso_counts / lib_size) * 1e6 if lib_size > 0 else 0.0
+                        else:
+                            iso_counts = 0
+                            iso_ratio = 0.0
+                            iso_cpm = 0.0
+                        
+                        plotting_data.append({
+                            'Synt_id': synt_id,
+                            'gene_id': gene_id,
+                            'haplotype': hap,
+                            'sample': samp_name,
+                            'condition': cond,
+                            'isoform_rank': ref_iso_rank,
+                            'isoform_id': ref_iso_id,  # Reference isoform ID
+                            'transcript_id': matched_transcript_id,  # Actual matched transcript
+                            'isoform_ratio': float(iso_ratio),
+                            'isoform_counts': int(iso_counts),
+                            f'{layer}_isoform_counts': int(iso_counts),
+                            'isoform_cpm': float(iso_cpm),
+                            f'{layer}_cpm': float(iso_cpm),
+                            f'{layer}_total_counts': int(hap_total),
+                            'similarity_to_reference': float(similarity),
+                            'reference_haplotype': reference_haplotype,
+                            'is_reference_haplotype': hap == reference_haplotype,
+                            'ratio_difference': 0.0,  # Will be filled in later
+                            'has_expression': iso_counts > 0
+                        })
+    
+    # Convert results to DataFrame
+    results_df = pd.DataFrame(results)
+    
+    print(f"\nDetailed failure reasons:")
+    for reason, count in stats['fail_reasons'].items():
+        if count > 0:
+            print(f"  {reason}: {count}")
+    
+    if len(results_df) > 0:
+        results_df['FDR'] = multipletests(results_df['p_value'], method='fdr_bh')[1]
+        results_df = results_df.sort_values('p_value')
+        
+        significant = results_df[(results_df['FDR'] < 0.05) & (results_df['ratio_difference'] > 0.2)]
+        
+        print(f"\nResults Summary:")
+        print(f"  Total syntelogs: {stats['total']}")
+        print(f"  Successfully tested: {stats['tested']}")
+        print(f"  Pairwise comparisons: {stats['comparisons']}")
+        print(f"  Using MAJOR isoform: {stats['major_used']}")
+        print(f"  Using MINOR isoform (fallback): {stats['minor_used']}")
+        print(f"  Failed to test: {stats['failed']}")
+        print(f"  Significant comparisons: {len(significant)}")
+        if stats['tested'] > 0:
+            print(f"  Minor fallback rate: {stats['minor_used']/stats['tested']*100:.1f}%")
     else:
-        combined_sim = exon_sim
+        print("\nNo results generated!")
     
-    return combined_sim
+    # Return based on return_plotting_data parameter
+    if return_plotting_data:
+        plotting_df = pd.DataFrame(plotting_data)
+        
+        if len(plotting_df) > 0 and len(results_df) > 0:
+            # Map the actual ratio_difference from results to plotting data
+            synt_stats = results_df.groupby('Synt_id').agg({
+                'p_value': 'min',
+                'FDR': 'min',
+                'ratio_difference': 'max'
+            }).reset_index()
+            
+            # Merge the statistics into plotting data
+            plotting_df = plotting_df.merge(
+                synt_stats[['Synt_id', 'p_value', 'FDR', 'ratio_difference']],
+                on='Synt_id',
+                how='left',
+                suffixes=('_old', '')
+            )
+            
+            # Drop the old ratio_difference column if it exists
+            if 'ratio_difference_old' in plotting_df.columns:
+                plotting_df = plotting_df.drop(columns=['ratio_difference_old'])
+            
+            if verbose:
+                print(f"\nPlotting data created:")
+                print(f"  Total rows: {len(plotting_df)}")
+                print(f"  Syntelogs: {plotting_df['Synt_id'].nunique()}")
+                print(f"  Unique isoforms: {plotting_df['isoform_id'].nunique()}")
+                print(f"  Major isoform rows: {(plotting_df['isoform_rank'] == 'major').sum()}")
+                print(f"  Minor isoform rows: {(plotting_df['isoform_rank'] == 'minor').sum()}")
+                print(f"  Other isoform rows: {(plotting_df['isoform_rank'] == 'other').sum()}")
+                print(f"  Rows with expression: {plotting_df['has_expression'].sum()}")
+                print(f"  Rows without expression: {(~plotting_df['has_expression']).sum()}")
+        
+        return results_df, plotting_df
+    else:
+        return results_df
 
 
-def _calculate_length_based_similarity(lengths1, lengths2, tolerance=10):
+def _identify_all_reference_isoforms(
+    synt_indices, haplotypes, transcript_ids,
+    exon_lengths_dict, intron_lengths_dict,
+    counts, condition_indices,
+    verbose=False
+):
     """
-    Calculate similarity between two genomic structures based on element counts and lengths.
-    
-    Parameters
-    ----------
-    lengths1, lengths2 : list of int
-        Lengths of genomic elements (exons or introns)
-    tolerance : int, default=10
-        Base pair tolerance for length comparison
+    Identify ALL isoforms in the reference haplotype, including those with zero expression.
+    Reference haplotype is chosen as the one with highest total expression.
     
     Returns
     -------
-    float
-        Similarity score between 0 and 1
+    tuple
+        (reference_haplotype, major_isoform_dict, minor_isoform_dict, all_isoforms_list)
     """
-    if not lengths1 or not lengths2:
-        return 0.0
+    import numpy as np
     
-    # Ensure we're working with lists
-    if not isinstance(lengths1, list):
-        lengths1 = [lengths1]
-    if not isinstance(lengths2, list):
-        lengths2 = [lengths2]
+    # Get haplotypes for this syntelog
+    synt_haplotypes = haplotypes.iloc[synt_indices]
+    unique_haplotypes = synt_haplotypes.dropna().unique()
     
-    # Component 1: Check if the number of elements is the same
-    count1 = len(lengths1)
-    count2 = len(lengths2)
+    # Choose reference haplotype as the one with highest total expression
+    haplotype_expressions = {}
+    for hap in unique_haplotypes:
+        hap_mask = synt_haplotypes == hap
+        hap_indices = synt_indices[np.where(hap_mask)[0]]
+        total_expr = np.sum(counts[np.ix_(condition_indices, hap_indices)])
+        haplotype_expressions[hap] = total_expr
     
-    # Penalize heavily for different counts
-    if count1 != count2:
-        count_similarity = 1.0 - abs(count1 - count2) / max(count1, count2)
-        # If counts differ significantly, return low similarity
-        if count_similarity < 0.5:
-            return count_similarity * 0.5  # Max 0.25 if counts differ a lot
-    else:
-        count_similarity = 1.0
+    # Select haplotype with maximum expression
+    reference_haplotype = max(haplotype_expressions, key=haplotype_expressions.get)
     
-    # Component 2: Calculate length similarity for corresponding elements
-    # Sort lengths to compare corresponding elements by size
-    lengths1_sorted = sorted(lengths1)
-    lengths2_sorted = sorted(lengths2)
+    if verbose:
+        print(f"DEBUG: Haplotype expressions: {haplotype_expressions}")
+        print(f"DEBUG: Selected reference haplotype: {reference_haplotype} (expression={haplotype_expressions[reference_haplotype]})")
     
-    # Compare corresponding lengths (pair shortest with shortest, etc.)
-    n_comparisons = min(len(lengths1_sorted), len(lengths2_sorted))
+    # Get all transcripts from reference haplotype
+    ref_hap_mask = synt_haplotypes == reference_haplotype
+    ref_hap_indices = synt_indices[np.where(ref_hap_mask)[0]]
     
-    if n_comparisons == 0:
-        return 0.0
-    
-    length_similarities = []
-    for i in range(n_comparisons):
-        len1 = lengths1_sorted[i]
-        len2 = lengths2_sorted[i]
+    # Calculate expression for each transcript
+    isoform_expressions = []
+    for idx in ref_hap_indices:
+        tid = transcript_ids[idx]
+        total_expr = np.sum(counts[np.ix_(condition_indices, [idx])])
         
-        # Calculate absolute difference
-        diff = abs(len1 - len2)
-        
-        # Apply tolerance: differences within tolerance have no penalty
-        if diff <= tolerance:
-            similarity = 1.0
+        isoform_expressions.append({
+            'transcript_id': tid,
+            'transcript_idx': idx,
+            'expression': total_expr,
+            'exon_structure': exon_lengths_dict.get(tid, []),
+            'intron_structure': intron_lengths_dict.get(tid, [])
+        })
+    
+    # Sort by expression
+    isoform_expressions.sort(key=lambda x: x['expression'], reverse=True)
+    
+    if verbose:
+        print(f"DEBUG: Reference haplotype {reference_haplotype} has {len(isoform_expressions)} isoforms")
+        for iso in isoform_expressions[:3]:
+            print(f"  {iso['transcript_id']}: expression={iso['expression']}")
+    
+    # Identify major and minor
+    major_isoform = isoform_expressions[0] if len(isoform_expressions) > 0 else None
+    minor_isoform = isoform_expressions[1] if len(isoform_expressions) > 1 else None
+    
+    # Assign ranks to all isoforms
+    all_isoforms = []
+    for i, iso in enumerate(isoform_expressions):
+        iso_copy = iso.copy()
+        if i == 0:
+            iso_copy['rank'] = 'major'
+        elif i == 1:
+            iso_copy['rank'] = 'minor'
         else:
-            # Calculate similarity based on relative difference beyond tolerance
-            adjusted_diff = diff - tolerance
-            avg_length = (len1 + len2) / 2
-            # Use exponential decay for penalty to avoid harsh drops
-            similarity = max(0.0, 1.0 - (adjusted_diff / avg_length))
+            iso_copy['rank'] = 'other'
+        all_isoforms.append(iso_copy)
+    
+    return reference_haplotype, major_isoform, minor_isoform, all_isoforms
+
+
+def _match_all_isoforms_for_plotting(
+    all_ref_isoforms,
+    unique_haplotypes,
+    synt_haplotypes,
+    synt_indices,
+    transcript_ids,
+    exon_lengths_dict,
+    intron_lengths_dict,
+    reference_haplotype,
+    major_isoform,
+    minor_isoform,
+    min_similarity_for_matching=0.4
+):
+    """
+    Match ALL reference isoforms (including zero-expressed ones) to isoforms in other haplotypes.
+    
+    Returns
+    -------
+    dict
+        Key: (haplotype, ref_isoform_id), Value: {'transcript_idx', 'transcript_id', 'similarity'}
+    """
+    import numpy as np
+    
+    matches = {}
+    
+    for hap in unique_haplotypes:
+        hap_mask = synt_haplotypes == hap
+        hap_indices = synt_indices[np.where(hap_mask)[0]]
         
-        length_similarities.append(similarity)
+        if len(hap_indices) == 0:
+            continue
+        
+        # For each reference isoform, find best match in this haplotype
+        for ref_iso in all_ref_isoforms:
+            ref_iso_id = ref_iso['transcript_id']
+            ref_exon_struct = ref_iso['exon_structure']
+            ref_intron_struct = ref_iso['intron_structure']
+            
+            # If this is the reference haplotype, use direct match
+            if hap == reference_haplotype:
+                matches[(hap, ref_iso_id)] = {
+                    'transcript_idx': ref_iso['transcript_idx'],
+                    'transcript_id': ref_iso_id,
+                    'similarity': 1.0
+                }
+                continue
+            
+            # Find best matching transcript in this haplotype
+            best_match_idx = None
+            best_similarity = 0.0
+            
+            for idx in hap_indices:
+                tid = transcript_ids[idx]
+                exon_struct = exon_lengths_dict.get(tid, [])
+                intron_struct = intron_lengths_dict.get(tid, [])
+                
+                similarity = _calculate_combined_structure_similarity(
+                    ref_exon_struct, exon_struct,
+                    ref_intron_struct, intron_struct
+                )
+                
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match_idx = idx
+            
+            # Only add if similarity meets threshold
+            if best_match_idx is not None and best_similarity >= min_similarity_for_matching:
+                matches[(hap, ref_iso_id)] = {
+                    'transcript_idx': best_match_idx,
+                    'transcript_id': transcript_ids[best_match_idx],
+                    'similarity': best_similarity
+                }
     
-    # Average length similarity
-    avg_length_similarity = sum(length_similarities) / n_comparisons
-    
-    # Penalize for extra elements (if counts differ)
-    if count1 != count2:
-        extra_elements = abs(count1 - count2)
-        penalty = extra_elements / max(count1, count2) * 0.2  # 20% penalty per extra element
-        avg_length_similarity *= (1 - penalty)
-    
-    # Combine count and length similarity
-    # Give more weight to length similarity if counts match
-    if count1 == count2:
-        final_similarity = 0.2 * count_similarity + 0.8 * avg_length_similarity
-    else:
-        final_similarity = 0.5 * count_similarity + 0.5 * avg_length_similarity
-    
-    return final_similarity
+    return matches
+
+
+
 
 def _identify_major_minor_isoforms(
     synt_indices, haplotypes, transcript_ids,
@@ -1211,481 +1646,239 @@ def _match_isoforms_across_haplotypes(
     
     return haplotype_matches
 
-
-def test_differential_isoform_structure(
-    adata, layer="unique_counts", test_condition="control",
-    min_similarity_for_matching=0.4,
-    use_introns=True,
-    exon_weight=0.6,
-    intron_weight=0.4,
-    inplace=True, 
-    verbose=False,
-    return_plotting_data=True
+def _calculate_combined_structure_similarity(
+    exon_structure1, exon_structure2,
+    intron_structure1=None, intron_structure2=None,
+    exon_weight=0.6, intron_weight=0.4,
+    length_tolerance=10  # base pairs tolerance for length comparison
 ):
     """
-    Test for DIU between alleles with intelligent major/minor isoform fallback.
+    Calculate combined similarity using both exon and intron structures.
+    
+    Similarity is based on:
+    - Whether the number of exons is the same
+    - Similarity of corresponding exon lengths (with tolerance)
+    - Similarity of corresponding intron lengths (with tolerance)
+    
+    Parameters
+    ----------
+    exon_structure1, exon_structure2 : list of int
+        Exon lengths as [length1, length2, ...]
+    intron_structure1, intron_structure2 : list of int or int, optional
+        Intron lengths as [length1, length2, ...] or single int
+    exon_weight : float, default=0.6
+        Weight for exon similarity in combined score
+    intron_weight : float, default=0.4
+        Weight for intron similarity in combined score
+    length_tolerance : int, default=10
+        Base pair tolerance for length similarity (bp difference that doesn't reduce similarity)
     
     Returns
     -------
-    tuple or pd.DataFrame
-        If return_plotting_data=True: returns (results_df, plotting_df)
-        If return_plotting_data=False: returns results_df only
+    float
+        Combined similarity score between 0 and 1
     """
-    import pandas as pd
-    import numpy as np
-    import re
-    from statsmodels.stats.multitest import multipletests
-    from isotools._transcriptome_stats import betabinom_lr_test
-    from anndata import AnnData
+    if not exon_structure1 or not exon_structure2:
+        return 0.0
     
-    if not isinstance(adata, AnnData):
-        raise ValueError("Input must be an AnnData object")
+    # Calculate exon similarity based on count and lengths
+    exon_sim = _calculate_length_based_similarity(
+        exon_structure1, exon_structure2, length_tolerance
+    )
     
-    if layer not in adata.layers:
-        raise ValueError(f"Layer '{layer}' not found")
-    
-    required_cols = ['Synt_id', 'haplotype']
-    for col in required_cols:
-        if col not in adata.var.columns:
-            raise ValueError(f"Required column '{col}' not found in adata.var")
-    
-    if 'exon_lengths' not in adata.uns:
-        raise ValueError("'exon_lengths' not found in adata.uns. Run add_exon_structure() first")
-    
-    if use_introns and 'intron_lengths' not in adata.uns:
-        print("Warning: use_introns=True but 'intron_lengths' not found. Using only exon structures")
-        use_introns = False
-    
-    if not inplace:
-        adata = adata.copy()
-    
-    counts = adata.layers[layer]
-    synt_ids = adata.var["Synt_id"]
-    haplotypes = adata.var["haplotype"]
-    transcript_ids = adata.var_names
-    exon_lengths_dict = adata.uns['exon_lengths']
-    intron_lengths_dict = adata.uns.get('intron_lengths', {}) if use_introns else {}
-    gene_ids = adata.var.get("gene_id", pd.Series([None] * len(adata.var), index=adata.var_names))
-    
-    if test_condition == "all":
-        condition_indices = np.arange(counts.shape[0])
-        condition_values = adata.obs['condition'].values
+    # Calculate intron similarity if available
+    if intron_structure1 is not None and intron_structure2 is not None:
+        # Convert single int to list for consistency
+        if isinstance(intron_structure1, (int, float)):
+            intron_structure1 = [intron_structure1]
+        if isinstance(intron_structure2, (int, float)):
+            intron_structure2 = [intron_structure2]
+            
+        intron_sim = _calculate_length_based_similarity(
+            intron_structure1, intron_structure2, length_tolerance
+        )
+        combined_sim = exon_weight * exon_sim + intron_weight * intron_sim
     else:
-        if 'condition' not in adata.obs.columns:
-            raise ValueError("'condition' not found in adata.obs")
-        condition_indices = np.where(adata.obs['condition'] == test_condition)[0]
-        condition_values = [test_condition] * len(condition_indices)
+        combined_sim = exon_sim
     
-    print(f"DEBUG: Found {len(condition_indices)} samples for condition '{test_condition}'")
+    # Ensure the result is bounded between 0 and 1
+    return max(0.0, min(1.0, combined_sim))
+
+
+def _calculate_length_based_similarity(lengths1, lengths2, tolerance=10):
+    """
+    Calculate similarity between two genomic structures based on element counts and lengths.
     
-    sample_names = adata.obs_names[condition_indices]
-    unique_syntelogs = synt_ids.dropna().unique()
-    unique_syntelogs = unique_syntelogs[unique_syntelogs != 0]
+    Parameters
+    ----------
+    lengths1, lengths2 : list of int
+        Lengths of genomic elements (exons or introns)
+    tolerance : int, default=10
+        Base pair tolerance for length comparison
     
-    print(f"DEBUG: Found {len(unique_syntelogs)} syntelogs to process")
+    Returns
+    -------
+    float
+        Similarity score between 0 and 1
+    """
+    if not lengths1 or not lengths2:
+        return 0.0
     
-    results = []
-    plotting_data = []
+    # Ensure we're working with lists
+    if not isinstance(lengths1, list):
+        lengths1 = [lengths1]
+    if not isinstance(lengths2, list):
+        lengths2 = [lengths2]
     
-    stats = {
-        'total': len(unique_syntelogs),
-        'tested': 0,
-        'comparisons': 0,
-        'major_used': 0,
-        'minor_used': 0,
-        'failed': 0,
-        'fail_reasons': {
-            'no_indices': 0,
-            'single_haplotype': 0,
-            'no_major': 0,
-            'no_matches': 0,
-            'major_not_on_all_no_minor': 0,
-            'no_reference': 0,
-            'zero_counts': 0,
-            'test_error': 0
-        }
-    }
+    # Component 1: Check if the number of elements is the same
+    count1 = len(lengths1)
+    count2 = len(lengths2)
     
-    if verbose:
-        print(f"Processing {len(unique_syntelogs)} syntelogs with major/minor fallback logic...")
-        print(f"Using {'exon+intron' if use_introns else 'exon-only'} structures")
+    # Penalize heavily for different counts
+    if count1 != count2:
+        count_similarity = 1.0 - abs(count1 - count2) / max(count1, count2)
+        # If counts differ significantly, return low similarity
+        if count_similarity < 0.5:
+            return count_similarity * 0.5  # Max 0.25 if counts differ a lot
+    else:
+        count_similarity = 1.0
     
-    for synt_idx, synt_id in enumerate(unique_syntelogs):
-        if verbose and synt_idx % 100 == 0:
-            print(f"Progress: {synt_idx}/{len(unique_syntelogs)}")
+    # Component 2: Calculate length similarity for corresponding elements
+    # Sort lengths to compare corresponding elements by size
+    lengths1_sorted = sorted(lengths1)
+    lengths2_sorted = sorted(lengths2)
+    
+    # Compare corresponding lengths (pair shortest with shortest, etc.)
+    n_comparisons = min(len(lengths1_sorted), len(lengths2_sorted))
+    
+    if n_comparisons == 0:
+        return 0.0
+    
+    length_similarities = []
+    for i in range(n_comparisons):
+        len1 = lengths1_sorted[i]
+        len2 = lengths2_sorted[i]
         
-        synt_mask = synt_ids == synt_id
-        synt_indices = np.where(synt_mask)[0]
+        # Calculate absolute difference
+        diff = abs(len1 - len2)
         
-        if len(synt_indices) == 0:
-            stats['fail_reasons']['no_indices'] += 1
-            stats['failed'] += 1
-            continue
-        
-        synt_haplotypes = haplotypes.iloc[synt_indices]
-        unique_haplotypes = synt_haplotypes.dropna().unique()
-        
-        if len(unique_haplotypes) < 2:
-            stats['fail_reasons']['single_haplotype'] += 1
-            stats['failed'] += 1
-            continue
-        
-        if synt_idx < 3:
-            print(f"\nDEBUG Syntelog {synt_id}: {len(unique_haplotypes)} haplotypes, {len(synt_indices)} transcripts")
-        
-        reference_haplotype, major_isoform, minor_isoform = _identify_major_minor_isoforms(
-            synt_indices, haplotypes, transcript_ids,
-            exon_lengths_dict, intron_lengths_dict,
-            counts, condition_indices,
-            verbose=synt_idx < 3
-        )
-        
-        if not major_isoform:
-            stats['fail_reasons']['no_major'] += 1
-            stats['failed'] += 1
-            continue
-        
-        haplotype_matches = _match_isoforms_across_haplotypes(
-            synt_indices, unique_haplotypes, synt_haplotypes, transcript_ids,
-            exon_lengths_dict, intron_lengths_dict,
-            reference_haplotype, major_isoform, minor_isoform,
-            counts, condition_indices,
-            min_similarity_for_matching=min_similarity_for_matching,
-            verbose=synt_idx < 3
-        )
-        
-        if synt_idx < 3:
-            print(f"DEBUG: Found {len(haplotype_matches)} haplotype matches")
-        
-        if len(haplotype_matches) < 2:
-            stats['fail_reasons']['no_matches'] += 1
-            stats['failed'] += 1
-            continue
-        
-        major_on_all = all(match['matched_isoform_type'] == 'major' for match in haplotype_matches.values())
-        
-        if synt_idx < 3:
-            print(f"DEBUG: Major on all haplotypes: {major_on_all}")
-        
-        if major_on_all:
-            isoform_type_for_testing = 'major'
-            reference_structure_exon = major_isoform['exon_structure']
-            reference_structure_intron = major_isoform['intron_structure']
-            reference_transcript = major_isoform['transcript_id']
-            stats['major_used'] += 1
-        elif minor_isoform:
-            isoform_type_for_testing = 'minor'
-            reference_structure_exon = minor_isoform['exon_structure']
-            reference_structure_intron = minor_isoform['intron_structure']
-            reference_transcript = minor_isoform['transcript_id']
-            stats['minor_used'] += 1
-            
-            filtered_matches = {}
-            for hap, match in haplotype_matches.items():
-                if hap == reference_haplotype:
-                    filtered_matches[hap] = {
-                        'matched_isoform_type': 'minor',
-                        'transcript_id': minor_isoform['transcript_id'],
-                        'transcript_idx': minor_isoform['transcript_idx'],
-                        'exon_structure': minor_isoform['exon_structure'],
-                        'intron_structure': minor_isoform['intron_structure'],
-                        'similarity_to_major': match['similarity_to_major'],
-                        'similarity_to_minor': 1.0,
-                        'expression': minor_isoform.get('expression', 0),
-                        'n_isoforms_in_haplotype': match['n_isoforms_in_haplotype']
-                    }
-                elif match['matched_isoform_type'] == 'minor':
-                    filtered_matches[hap] = match
-            
-            haplotype_matches = filtered_matches
-            
-            if synt_idx < 3:
-                print(f"DEBUG: After filtering for minor, {len(haplotype_matches)} haplotypes remain")
-            
-            if len(haplotype_matches) < 2:
-                stats['fail_reasons']['no_matches'] += 1
-                stats['failed'] += 1
-                continue
+        # Apply tolerance: differences within tolerance have no penalty
+        if diff <= tolerance:
+            similarity = 1.0
         else:
-            stats['fail_reasons']['major_not_on_all_no_minor'] += 1
-            stats['failed'] += 1
-            continue
+            # Calculate similarity based on relative difference beyond tolerance
+            adjusted_diff = diff - tolerance
+            avg_length = (len1 + len2) / 2
+            # Use exponential decay for penalty to avoid harsh drops
+            similarity = max(0.0, 1.0 - (adjusted_diff / avg_length))
         
-        if synt_idx < 3:
-            print(f"DEBUG: Testing using {isoform_type_for_testing.upper()} isoform")
-        
-        if reference_haplotype not in haplotype_matches:
-            if synt_idx < 3:
-                print(f"DEBUG ERROR: Reference haplotype {reference_haplotype} not in matches!")
-            stats['fail_reasons']['no_reference'] += 1
-            stats['failed'] += 1
-            continue
-        
-        ref_match = haplotype_matches[reference_haplotype]
-        ref_hap_mask = synt_haplotypes == reference_haplotype
-        ref_hap_indices = synt_indices[np.where(ref_hap_mask)[0]]
-        ref_isoform_counts = counts[np.ix_(condition_indices, [ref_match['transcript_idx']])].flatten()
-        ref_hap_totals = np.sum(counts[np.ix_(condition_indices, ref_hap_indices)], axis=1)
-        
-        if synt_idx < 3:
-            print(f"DEBUG: Reference counts: {ref_isoform_counts[:3]}, totals: {ref_hap_totals[:3]}")
-        
-        comparisons_made = 0
-        for other_hap, other_match in haplotype_matches.items():
-            if other_hap == reference_haplotype:
-                continue
-            
-            other_hap_mask = synt_haplotypes == other_hap
-            other_hap_indices = synt_indices[np.where(other_hap_mask)[0]]
-            other_isoform_counts = counts[np.ix_(condition_indices, [other_match['transcript_idx']])].flatten()
-            other_hap_totals = np.sum(counts[np.ix_(condition_indices, other_hap_indices)], axis=1)
-            
-            if np.all(ref_isoform_counts == 0) or np.all(other_isoform_counts == 0):
-                stats['fail_reasons']['zero_counts'] += 1
-                continue
-            if np.all(ref_hap_totals == 0) or np.all(other_hap_totals == 0):
-                stats['fail_reasons']['zero_counts'] += 1
-                continue
-            
-            try:
-                test_result = betabinom_lr_test(
-                    [ref_isoform_counts.astype(int), other_isoform_counts.astype(int)],
-                    [ref_hap_totals.astype(int), other_hap_totals.astype(int)]
-                )
-                p_value = test_result[0]
-                ratio_stats = test_result[1]
-                ratio_difference = abs(ratio_stats[0] - ratio_stats[2])
-            except Exception as e:
-                if synt_idx < 3:
-                    print(f"DEBUG: Error in test: {str(e)}")
-                stats['fail_reasons']['test_error'] += 1
-                continue
-            
-            stats['comparisons'] += 1
-            comparisons_made += 1
-            
-            results.append({
-                'Synt_id': synt_id,
-                'reference_haplotype': reference_haplotype,
-                'comparison_haplotype': other_hap,
-                'reference_transcript': reference_transcript,
-                'comparison_transcript': other_match['transcript_id'],
-                'isoform_type_tested': isoform_type_for_testing,
-                'p_value': p_value,
-                'ratio_difference': ratio_difference,
-                'reference_ratio_mean': ratio_stats[0],
-                'comparison_ratio_mean': ratio_stats[2],
-            })
-        
-        if comparisons_made > 0:
-            stats['tested'] += 1
-        
-        # Create plotting data
-        if return_plotting_data and comparisons_made > 0:
-            gene_id = gene_ids.get(reference_transcript, None)
-            library_sizes = np.sum(counts[condition_indices, :], axis=1)
-            
-            for hap in unique_haplotypes:
-                hap_mask = synt_haplotypes == hap
-                hap_indices = synt_indices[np.where(hap_mask)[0]]
-                
-                if len(hap_indices) == 0:
-                    continue
-                
-                match = haplotype_matches.get(hap, None)
-                
-                # MAJOR isoform
-                if match is not None and isoform_type_for_testing == 'major':
-                    major_transcript_idx = match['transcript_idx']
-                    major_transcript_id = match['transcript_id']
-                    major_similarity = match['similarity_to_major']
-                else:
-                    best_major_match = None
-                    best_major_sim = 0.0
-                    for idx in hap_indices:
-                        tid = transcript_ids[idx]
-                        exon_str = exon_lengths_dict.get(tid, [])
-                        intron_str = intron_lengths_dict.get(tid, [])
-                        sim = _calculate_combined_structure_similarity(
-                            major_isoform['exon_structure'], exon_str,
-                            major_isoform['intron_structure'], intron_str
-                        )
-                        if sim > best_major_sim:
-                            best_major_sim = sim
-                            best_major_match = idx
-                    
-                    if best_major_match is not None and best_major_sim >= min_similarity_for_matching:
-                        major_transcript_idx = best_major_match
-                        major_transcript_id = transcript_ids[best_major_match]
-                        major_similarity = best_major_sim
-                    else:
-                        major_transcript_idx = None
-                        major_transcript_id = major_isoform['transcript_id']
-                        major_similarity = 0.0
-                
-                for sample_idx, (cond_idx, samp_name, cond) in enumerate(zip(condition_indices, sample_names, condition_values)):
-                    hap_total = np.sum(counts[cond_idx, hap_indices])
-                    
-                    if major_transcript_idx is not None:
-                        major_counts = counts[cond_idx, major_transcript_idx]
-                        major_ratio = major_counts / hap_total if hap_total > 0 else 0.0
-                        lib_size = library_sizes[sample_idx]
-                        major_cpm = (major_counts / lib_size) * 1e6 if lib_size > 0 else 0.0
-                    else:
-                        major_counts = 0
-                        major_ratio = 0.0
-                        major_cpm = 0.0
-                    
-                    plotting_data.append({
-                        'Synt_id': synt_id,
-                        'gene_id': gene_id,
-                        'haplotype': hap,
-                        'sample': samp_name,
-                        'condition': cond,
-                        'isoform_rank': 'major',
-                        'isoform_id': major_isoform['transcript_id'],
-                        'transcript_id': major_transcript_id,
-                        'isoform_ratio': float(major_ratio),
-                        'isoform_counts': int(major_counts),
-                        f'{layer}_isoform_counts': int(major_counts),
-                        'isoform_cpm': float(major_cpm),
-                        f'{layer}_cpm': float(major_cpm),
-                        f'{layer}_total_counts': int(hap_total),
-                        'similarity_to_major': float(major_similarity),
-                        'reference_haplotype': reference_haplotype,
-                        'is_reference_haplotype': hap == reference_haplotype,
-                        'ratio_difference': 0.0,
-                    })
-                
-                # MINOR isoform
-                if minor_isoform:
-                    if match and isoform_type_for_testing == 'minor':
-                        minor_transcript_idx = match['transcript_idx']
-                        minor_transcript_id = match['transcript_id']
-                        minor_similarity = match.get('similarity_to_minor', 0.0)
-                    elif hap == reference_haplotype:
-                        minor_transcript_idx = minor_isoform['transcript_idx']
-                        minor_transcript_id = minor_isoform['transcript_id']
-                        minor_similarity = 1.0
-                    else:
-                        best_minor_match = None
-                        best_minor_sim = 0.0
-                        for idx in hap_indices:
-                            if major_transcript_idx and idx == major_transcript_idx:
-                                continue
-                            tid = transcript_ids[idx]
-                            exon_str = exon_lengths_dict.get(tid, [])
-                            intron_str = intron_lengths_dict.get(tid, [])
-                            sim = _calculate_combined_structure_similarity(
-                                minor_isoform['exon_structure'], exon_str,
-                                minor_isoform['intron_structure'], intron_str
-                            )
-                            if sim > best_minor_sim:
-                                best_minor_sim = sim
-                                best_minor_match = idx
-                        
-                        if best_minor_match is not None:
-                            minor_transcript_idx = best_minor_match
-                            minor_transcript_id = transcript_ids[best_minor_match]
-                            minor_similarity = best_minor_sim
-                        else:
-                            minor_transcript_idx = None
-                            minor_transcript_id = minor_isoform['transcript_id']
-                            minor_similarity = 0.0
-                    
-                    for sample_idx, (cond_idx, samp_name, cond) in enumerate(zip(condition_indices, sample_names, condition_values)):
-                        hap_total = np.sum(counts[cond_idx, hap_indices])
-                        
-                        if minor_transcript_idx is not None:
-                            minor_counts = counts[cond_idx, minor_transcript_idx]
-                            minor_ratio = minor_counts / hap_total if hap_total > 0 else 0.0
-                            lib_size = library_sizes[sample_idx]
-                            minor_cpm = (minor_counts / lib_size) * 1e6 if lib_size > 0 else 0.0
-                        else:
-                            minor_counts = 0
-                            minor_ratio = 0.0
-                            minor_cpm = 0.0
-                        
-                        plotting_data.append({
-                            'Synt_id': synt_id,
-                            'gene_id': gene_id,
-                            'haplotype': hap,
-                            'sample': samp_name,
-                            'condition': cond,
-                            'isoform_rank': 'minor',
-                            'isoform_id': minor_isoform['transcript_id'],
-                            'transcript_id': minor_transcript_id,
-                            'isoform_ratio': float(minor_ratio),
-                            'isoform_counts': int(minor_counts),
-                            f'{layer}_isoform_counts': int(minor_counts),
-                            'isoform_cpm': float(minor_cpm),
-                            f'{layer}_cpm': float(minor_cpm),
-                            f'{layer}_total_counts': int(hap_total),
-                            'similarity_to_major': float(minor_similarity),
-                            'reference_haplotype': reference_haplotype,
-                            'is_reference_haplotype': hap == reference_haplotype,
-                            'ratio_difference': 0.0,
-                        })
+        length_similarities.append(similarity)
     
-    # Convert results to DataFrame
-    results_df = pd.DataFrame(results)
+    # Average length similarity
+    avg_length_similarity = sum(length_similarities) / n_comparisons
     
-    print(f"\nDetailed failure reasons:")
-    for reason, count in stats['fail_reasons'].items():
-        if count > 0:
-            print(f"  {reason}: {count}")
+    # Penalize for extra elements (if counts differ)
+    if count1 != count2:
+        extra_elements = abs(count1 - count2)
+        penalty = extra_elements / max(count1, count2) * 0.2  # 20% penalty per extra element
+        avg_length_similarity *= (1 - penalty)
     
-    if len(results_df) > 0:
-        results_df['FDR'] = multipletests(results_df['p_value'], method='fdr_bh')[1]
-        results_df = results_df.sort_values('p_value')
-        
-        significant = results_df[(results_df['FDR'] < 0.05) & (results_df['ratio_difference'] > 0.2)]
-        
-        print(f"\nResults Summary:")
-        print(f"  Total syntelogs: {stats['total']}")
-        print(f"  Successfully tested: {stats['tested']}")
-        print(f"  Pairwise comparisons: {stats['comparisons']}")
-        print(f"  Using MAJOR isoform: {stats['major_used']}")
-        print(f"  Using MINOR isoform (fallback): {stats['minor_used']}")
-        print(f"  Failed to test: {stats['failed']}")
-        print(f"  Significant comparisons: {len(significant)}")
-        if stats['tested'] > 0:
-            print(f"  Minor fallback rate: {stats['minor_used']/stats['tested']*100:.1f}%")
+    # Combine count and length similarity
+    # Give more weight to length similarity if counts match
+    if count1 == count2:
+        final_similarity = 0.2 * count_similarity + 0.8 * avg_length_similarity
     else:
-        print("\nNo results generated!")
+        final_similarity = 0.5 * count_similarity + 0.5 * avg_length_similarity
     
-    # Return based on return_plotting_data parameter
-    if return_plotting_data:
-        plotting_df = pd.DataFrame(plotting_data)
-        
-        if len(plotting_df) > 0 and len(results_df) > 0:
-            # Map the actual ratio_difference from results to plotting data
-            # For each Synt_id, use the maximum ratio_difference across all pairwise comparisons
-            synt_stats = results_df.groupby('Synt_id').agg({
-                'p_value': 'min',
-                'FDR': 'min',
-                'ratio_difference': 'max'  # Use max difference across comparisons
-            }).reset_index()
-            
-            # Merge the statistics into plotting data
-            plotting_df = plotting_df.merge(
-                synt_stats[['Synt_id', 'p_value', 'FDR', 'ratio_difference']],
-                on='Synt_id',
-                how='left',
-                suffixes=('_old', '')
-            )
-            
-            # Drop the old ratio_difference column if it exists
-            if 'ratio_difference_old' in plotting_df.columns:
-                plotting_df = plotting_df.drop(columns=['ratio_difference_old'])
-            
-            if verbose:
-                print(f"\nPlotting data created:")
-                print(f"  Total rows: {len(plotting_df)}")
-                print(f"  Syntelogs: {plotting_df['Synt_id'].nunique()}")
-                print(f"  Major isoform rows: {(plotting_df['isoform_rank'] == 'major').sum()}")
-                print(f"  Minor isoform rows: {(plotting_df['isoform_rank'] == 'minor').sum()}")
-        
-        return results_df, plotting_df
+    # Ensure the result is bounded between 0 and 1
+    return max(0.0, min(1.0, final_similarity))
+
+
+
+def _calculate_length_based_similarity(lengths1, lengths2, tolerance=10):
+    """
+    Calculate similarity between two genomic structures based on element counts and lengths.
+    
+    Parameters
+    ----------
+    lengths1, lengths2 : list of int
+        Lengths of genomic elements (exons or introns)
+    tolerance : int, default=10
+        Base pair tolerance for length comparison
+    
+    Returns
+    -------
+    float
+        Similarity score between 0 and 1
+    """
+    if not lengths1 or not lengths2:
+        return 0.0
+    
+    # Ensure we're working with lists
+    if not isinstance(lengths1, list):
+        lengths1 = [lengths1]
+    if not isinstance(lengths2, list):
+        lengths2 = [lengths2]
+    
+    # Component 1: Check if the number of elements is the same
+    count1 = len(lengths1)
+    count2 = len(lengths2)
+    
+    # Penalize heavily for different counts
+    if count1 != count2:
+        count_similarity = 1.0 - abs(count1 - count2) / max(count1, count2)
+        # If counts differ significantly, return low similarity
+        if count_similarity < 0.5:
+            return count_similarity * 0.5  # Max 0.25 if counts differ a lot
     else:
-        return results_df
+        count_similarity = 1.0
+    
+    # Component 2: Calculate length similarity for corresponding elements
+    # Sort lengths to compare corresponding elements by size
+    lengths1_sorted = sorted(lengths1)
+    lengths2_sorted = sorted(lengths2)
+    
+    # Compare corresponding lengths (pair shortest with shortest, etc.)
+    n_comparisons = min(len(lengths1_sorted), len(lengths2_sorted))
+    
+    if n_comparisons == 0:
+        return 0.0
+    
+    length_similarities = []
+    for i in range(n_comparisons):
+        len1 = lengths1_sorted[i]
+        len2 = lengths2_sorted[i]
+        
+        # Calculate absolute difference
+        diff = abs(len1 - len2)
+        
+        # Apply tolerance: differences within tolerance have no penalty
+        if diff <= tolerance:
+            similarity = 1.0
+        else:
+            # Calculate similarity based on relative difference beyond tolerance
+            adjusted_diff = diff - tolerance
+            avg_length = (len1 + len2) / 2
+            # Use exponential decay for penalty to avoid harsh drops
+            similarity = max(0.0, 1.0 - (adjusted_diff / avg_length))
+        
+        length_similarities.append(similarity)
+    
+    # Average length similarity
+    avg_length_similarity = sum(length_similarities) / n_comparisons
+    
+    # Penalize for extra elements (if counts differ)
+    if count1 != count2:
+        extra_elements = abs(count1 - count2)
+        penalty = extra_elements / max(count1, count2) * 0.2  # 20% penalty per extra element
+        avg_length_similarity *= (1 - penalty)
+    
+    # Combine count and length similarity
+    # Give more weight to length similarity if counts match
+    if count1 == count2:
+        final_similarity = 0.2 * count_similarity + 0.8 * avg_length_similarity
+    else:
+        final_similarity = 0.5 * count_similarity + 0.5 * avg_length_similarity
+    
+    # Ensure the result is bounded between 0 and 1
+    return max(0.0, min(1.0, final_similarity))
