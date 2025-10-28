@@ -6,9 +6,7 @@
 Welcome to polyase documentation
 =====================
 
-Add your content using ``reStructuredText`` syntax. See the
-`reStructuredText <https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html>`_
-documentation for details.
+This is the documentation for polyase, a framework for allele-specific expression analysis using long-read RNA-seq and phased genome assemblies.
 
 
 
@@ -16,16 +14,8 @@ documentation for details.
    :maxdepth: 2
    :caption: Getting Started:
 
-   intro
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Examples:
-
    examples
 
-.. automodule:: polyase.stats
-    :members:
 
 .. toctree::
    :maxdepth: 2
