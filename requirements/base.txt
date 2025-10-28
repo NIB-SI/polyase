@@ -46,7 +46,6 @@ ptyprocess
 pure_eval
 Pygments
 pyparsing
-pyranges
 PySide6==6.8.2
 pytest
 python-dateutil

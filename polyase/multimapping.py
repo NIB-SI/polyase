@@ -279,9 +279,9 @@ def calculate_per_allele_ratios(adata, unique_layer='unique_counts', multi_layer
 
     # Add to var with descriptive column name
     if count_scaling:
-        column_name = f'multimapping_ratio_per_allele_{scaling_method}'
+        column_name = f'tx_multimapping_ratio_per_allele_{scaling_method}'
     else:
-        column_name = 'multimapping_ratio_per_allele'
+        column_name = 'tx_multimapping_ratio_per_allele'
 
     adata.var[column_name] = per_allele_ratios
 

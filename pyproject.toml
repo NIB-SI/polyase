@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyase"
-version = "0.1.7"
+version = "0.1.8"
 description = "A package for analyzing allele-specific expression in polyploid organisms"
 authors = [
     {name = "nadjano", email = "nadja.franziska.nolte@nib.si"}
@@ -16,7 +16,6 @@ dependencies = [
         "numpy",
         "scipy",
         "pandas",
-        "pyranges",
         "anndata",
         "matplotlib",
         "seaborn",
@@ -25,4 +24,6 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/nadjano/polyase"
+Homepage = "https://polyase.readthedocs.io/en/latest/"
+Issues = "https://github.com/nadjano/polyase/issues"
+

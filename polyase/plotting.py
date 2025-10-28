@@ -1140,7 +1140,9 @@ def plot_differential_isoform_usage(
             if "functional_annotation" in annotation_df.columns:
                 filtered_annotation = annotation_df.filter(pl.col("gene_id") == gene)
                 if len(filtered_annotation) > 0:
-                    annotation_txt = filtered_annotation.head(1)["functional_annotation"][0].split('/')[0]
+                    annotation_txt = filtered_annotation.head(1)["functional_annotation"][0].split('/')
+                    annotation_txt = list(dict.fromkeys(annotation_txt))
+                    annotation_txt = ' '.join(annotation_txt)
                 else:
                     print(f"Warning: No annotation found for gene {gene}")
             else:
@@ -1367,7 +1369,9 @@ def plot_allele_specific_isoform_structure(
             if "functional_annotation" in annotation_df.columns:
                 filtered_annotation = annotation_df.filter(pl.col("gene_id") == gene)
                 if len(filtered_annotation) > 0:
-                    annotation_txt = filtered_annotation.head(1)["functional_annotation"][0].split('/')[0]
+                    annotation_txt = filtered_annotation.head(1)["functional_annotation"][0].split('/')
+                    annotation_txt = list(dict.fromkeys(annotation_txt))
+                    annotation_txt = ' '.join(annotation_txt)
                 else:
                     print(f"Warning: No annotation found for gene {gene}")
             else:
