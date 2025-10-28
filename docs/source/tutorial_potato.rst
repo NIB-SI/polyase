@@ -1,4 +1,5 @@
 .. toctree::
    :maxdepth: 2
+   :caption: Tutorial:
 
-   potato_polyase
+   potato_polyase_1
