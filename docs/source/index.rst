@@ -23,7 +23,7 @@ This is the documentation for polyase, a framework for allele-specific expressio
 
    tutorial
    tutorial_rice
-   tutorial_potato_1
+   tutorial_potato
 
 .. toctree::
    :maxdepth: 2
