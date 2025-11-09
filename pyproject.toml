@@ -1,6 +1,6 @@
 [project]
 name = "polyase"
-version = "0.1.8"
+version = "0.1.9"
 description = "A package for analyzing allele-specific expression in polyploid organisms"
 authors = [
     {name = "nadja.franziska.nolte@nib.si"}

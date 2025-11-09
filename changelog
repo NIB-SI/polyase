@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update test_isoform_structure
 - Improve isofrom matching
 
+## [0.1.9]
+### Changed
+
+- run poetry and add versions
+
+### Removed
+- requirements.txt
 
 
 ## [0.1.7]
