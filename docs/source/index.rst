@@ -6,7 +6,7 @@
 Welcome to polyase documentation
 =====================
 
-.. figure:: /_static/images/intro/Fig1_pipelines_plain.svg
+.. figure:: /_static/images/intro/Fig1_pipelines.png
    :width: 100%
    :align: center
    :alt: Flowchart of the polyase framework
@@ -16,7 +16,7 @@ This is the documentation for polyase, a framework for allele-specific expressio
 The framework consists of three components:
 
 1) `syntelogfinder <https://github.com/NIB-SI/syntelogfinder>`_: a nextflow pipeline to identify syntenic genes in phased genome assemblies using GENESPACE.
-   Input: phased genome assemblies and their annotations in GFF3 format.
+   Input: phased genome assembly and their annotations in GFF3 format.
 
 2) `longrnaseq <https://github.com/nadjano/longrnaseq>`_: a nextflow pipeline for allelic gene and isoform quantification of long-read RNA-seq data, including novel isoform discovery and quality control.
    Input: long-read RNA-seq data (PacBio or ONT)(2 conditions and replicates) and a phased genome assembly with its annotation in GTF format.
