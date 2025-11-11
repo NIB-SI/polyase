@@ -9,7 +9,7 @@
 project = 'polyase'
 copyright = '2025, Nadja Nolte'
 author = 'Nadja Nolte'
-release = '0.0.1'
+release = '0.1.0'
 
 import os
 import sys
