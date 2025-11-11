@@ -14,6 +14,205 @@ except ImportError:
     print("Warning: pyranges not available. GTF reading will be limited.")
 
 
+def _add_structure_to_adata_var(
+    adata: ad.AnnData,
+    structure_df: pd.DataFrame,
+    include_introns: bool = True,
+    verbose: bool = True
+) -> None:
+    """
+    Add structure information (exons and introns) to AnnData.var.
+    Optimized version using vectorized operations.
+    """
+    # Set transcript_id as index
+    structure_df = structure_df.set_index('transcript_id')
+    
+    # Reindex to match adata.var_names (handles missing transcripts automatically)
+    structure_aligned = structure_df.reindex(adata.var_names)
+    
+    # Assign columns in bulk (vectorized operations)
+    # Convert to string first to avoid categorical dtype issues
+    adata.var['exon_structure'] = structure_aligned['exon_structure'].astype(str).replace('nan', '')
+    adata.var['transcript_length'] = structure_aligned['transcript_length']
+    adata.var['n_exons'] = structure_aligned['n_exons'].astype('Int64')
+    
+    if include_introns:
+        adata.var['intron_structure'] = structure_aligned['intron_structure'].astype(str).replace('nan', '')
+        adata.var['total_intron_length'] = structure_aligned['total_intron_length']
+        adata.var['n_introns'] = structure_aligned['n_introns'].astype('Int64')
+    
+    # Optional columns - batch check and assign
+    optional_cols = {
+        'chromosome': 'chromosome',
+        'strand': 'strand',
+        'gene_id': 'gene_id_gtf'
+    }
+    
+    for src_col, dest_col in optional_cols.items():
+        if src_col in structure_df.columns:
+            # Convert to string first to avoid categorical issues
+            col_data = structure_aligned[src_col].astype(str)
+            # Replace 'nan' string with empty string
+            col_data = col_data.replace('nan', '')
+            adata.var[dest_col] = col_data
+    
+    # Store in uns - more efficient conversion
+    adata.uns['exon_lengths'] = structure_aligned['exon_lengths'].apply(
+        lambda x: x if isinstance(x, list) else []
+    ).to_dict()
+    
+    if include_introns:
+        adata.uns['intron_lengths'] = structure_aligned['intron_lengths'].apply(
+            lambda x: x if isinstance(x, list) else []
+        ).to_dict()
+    
+    if verbose:
+        matched = structure_aligned['exon_structure'].notna().sum()
+        print(f"Matched structure information for {matched}/{len(adata.var_names)} transcripts")
+        if matched < len(adata.var_names):
+            print(f"Warning: {len(adata.var_names) - matched} transcripts had no structure information")
+
+
+def _create_transcript_structure_df(
+    gtf_df: pd.DataFrame,
+    transcript_id_col: str = 'transcript_id',
+    include_introns: bool = True,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Create a DataFrame with transcript structures (exon and intron lengths) from GTF/GFF data.
+    Optimized version with vectorized operations where possible.
+    """
+    # Filter for exon features only
+    exon_df = gtf_df[gtf_df['Feature'] == 'exon'].copy()
+
+    if exon_df.empty:
+        if verbose:
+            print("Warning: No exon features found in the data")
+        return pd.DataFrame()
+
+    # Calculate exon lengths (vectorized)
+    exon_df['exon_length'] = exon_df['End'] - exon_df['Start'] + 1
+
+    # Determine sort column once per transcript using vectorized operations
+    has_strand = 'Strand' in exon_df.columns
+    has_exon_number = 'exon_number' in exon_df.columns and not exon_df['exon_number'].isna().all()
+    
+    # Pre-sort the dataframe for more efficient groupby
+    if has_exon_number:
+        # If exon_number exists, use it (fastest)
+        exon_df = exon_df.sort_values([transcript_id_col, 'exon_number'])
+        sort_by_exon_num = True
+    else:
+        # Otherwise, sort by position accounting for strand
+        if has_strand:
+            # Create a sort key that accounts for strand
+            exon_df['_sort_key'] = exon_df.apply(
+                lambda row: -row['Start'] if row['Strand'] == '-' else row['Start'], 
+                axis=1
+            )
+            exon_df = exon_df.sort_values([transcript_id_col, '_sort_key'])
+        else:
+            exon_df = exon_df.sort_values([transcript_id_col, 'Start'])
+        sort_by_exon_num = False
+
+    # Use groupby with aggregation functions (much faster than iterating)
+    agg_dict = {
+        'exon_length': ['sum', 'count', list],
+        'Start': list,
+        'End': list,
+    }
+    
+    # Add optional columns
+    if 'gene_id' in exon_df.columns:
+        agg_dict['gene_id'] = 'first'
+    if 'Chromosome' in exon_df.columns:
+        agg_dict['Chromosome'] = 'first'
+    if 'Strand' in exon_df.columns:
+        agg_dict['Strand'] = 'first'
+    
+    grouped = exon_df.groupby(transcript_id_col, sort=False).agg(agg_dict)
+    
+    # Flatten multi-level columns
+    grouped.columns = ['_'.join(col).strip('_') if isinstance(col, tuple) else col 
+                       for col in grouped.columns]
+    
+    # Rename aggregated columns
+    column_mapping = {
+        'exon_length_sum': 'transcript_length',
+        'exon_length_count': 'n_exons',
+        'exon_length_list': 'exon_lengths',
+        'Start_list': 'starts',
+        'End_list': 'ends',
+    }
+    grouped = grouped.rename(columns=column_mapping)
+    
+    # Create exon structure strings (vectorized)
+    grouped['exon_structure'] = grouped['exon_lengths'].apply(
+        lambda x: ','.join(map(str, x))
+    )
+    
+    # Calculate intron information if requested
+    if include_introns:
+        def calc_introns(row):
+            """Calculate intron lengths for a transcript"""
+            if row['n_exons'] <= 1:
+                return [], '', 0, 0
+            
+            starts = row['starts']
+            ends = row['ends']
+            
+            # Calculate intron lengths (gap between consecutive exons)
+            intron_lengths = [starts[i+1] - ends[i] - 1 for i in range(len(ends) - 1)]
+            intron_structure = ','.join(map(str, intron_lengths))
+            total_intron_length = sum(intron_lengths)
+            n_introns = len(intron_lengths)
+            
+            return intron_lengths, intron_structure, total_intron_length, n_introns
+        
+        # Apply intron calculation (still need apply here, but only once per transcript)
+        intron_data = grouped.apply(calc_introns, axis=1)
+        
+        # Unpack results
+        grouped['intron_lengths'] = intron_data.apply(lambda x: x[0])
+        grouped['intron_structure'] = intron_data.apply(lambda x: x[1])
+        grouped['total_intron_length'] = intron_data.apply(lambda x: x[2])
+        grouped['n_introns'] = intron_data.apply(lambda x: x[3])
+    
+    # Drop temporary columns
+    grouped = grouped.drop(columns=['starts', 'ends'], errors='ignore')
+    
+    # Reset index to make transcript_id a column
+    structure_df = grouped.reset_index()
+    structure_df = structure_df.rename(columns={transcript_id_col: 'transcript_id'})
+    
+    # Ensure correct column names for optional fields
+    rename_map = {}
+    if 'gene_id_first' in structure_df.columns:
+        rename_map['gene_id_first'] = 'gene_id'
+    if 'Chromosome_first' in structure_df.columns:
+        rename_map['Chromosome_first'] = 'chromosome'
+    if 'Strand_first' in structure_df.columns:
+        rename_map['Strand_first'] = 'strand'
+    
+    if rename_map:
+        structure_df = structure_df.rename(columns=rename_map)
+    
+    if verbose:
+        print(f"Processed {len(structure_df)} transcripts")
+        print("Exon count distribution:")
+        print(structure_df['n_exons'].value_counts().sort_index().head(10))
+
+        if include_introns:
+            multi_exon = structure_df[structure_df['n_exons'] > 1]
+            if len(multi_exon) > 0:
+                print(f"Calculated introns for {len(multi_exon)} multi-exon transcripts")
+                print("Intron count distribution:")
+                print(multi_exon['n_introns'].value_counts().sort_index().head(10))
+
+    return structure_df
+
+
 def add_exon_structure(
     adata: ad.AnnData,
     gtf_file: Optional[str] = None,
@@ -54,7 +253,6 @@ def add_exon_structure(
     ValueError
         If neither gtf_file nor gtf_df is provided, or if required columns are missing
     """
-
     # Input validation
     if gtf_file is None and gtf_df is None:
         raise ValueError("Either gtf_file or gtf_df must be provided")
@@ -117,232 +315,44 @@ def add_exon_structure(
     return None if inplace else adata
 
 
-def _create_transcript_structure_df(
-    gtf_df: pd.DataFrame,
-    transcript_id_col: str = 'transcript_id',
+# Convenience function for common use case
+def add_structure_from_gtf(
+    adata: ad.AnnData,
+    gtf_file: str,
     include_introns: bool = True,
+    inplace: bool = True,
     verbose: bool = True
-) -> pd.DataFrame:
+) -> Optional[ad.AnnData]:
     """
-    Create a DataFrame with transcript structures (exon and intron lengths) from GTF/GFF data.
+    Convenience function to add exon and intron structure from GTF file.
 
     Parameters
     ----------
-    gtf_df : pd.DataFrame
-        DataFrame with genomic coordinates containing required columns
-    transcript_id_col : str, default='transcript_id'
-        Column name containing transcript identifiers
+    adata : AnnData
+        AnnData object containing transcript data
+    gtf_file : str
+        Path to GTF/GFF file
     include_introns : bool, default=True
-        Whether to calculate intron lengths
+        Whether to calculate and include intron structures
+    inplace : bool, default=True
+        If True, modify the AnnData object in place
     verbose : bool, default=True
         Whether to print progress information
 
     Returns
     -------
-    pd.DataFrame
-        DataFrame with transcript structure information including introns
+    AnnData or None
+        Modified AnnData object if inplace=False, otherwise None
     """
-
-    # Filter for exon features only
-    exon_df = gtf_df[gtf_df['Feature'] == 'exon'].copy()
-
-    if exon_df.empty:
-        if verbose:
-            print("Warning: No exon features found in the data")
-        return pd.DataFrame()
-
-    # Calculate exon lengths
-    exon_df['exon_length'] = exon_df['End'] - exon_df['Start'] + 1
-
-    # Group by transcript_id to get structure for each transcript
-    results = []
-
-    for transcript_id, group in exon_df.groupby(transcript_id_col):
-        # Sort exons by position (accounting for strand if available)
-        if 'Strand' in group.columns:
-            if group['Strand'].iloc[0] == '-':
-                # For negative strand, sort by decreasing start position
-                sorted_group = group.sort_values('Start', ascending=False)
-            else:
-                # For positive strand, sort by increasing start position
-                sorted_group = group.sort_values('Start', ascending=True)
-        else:
-            # Default to sorting by start position if strand info not available
-            sorted_group = group.sort_values('Start', ascending=True)
-
-        # If exon_number column exists and is not all NaN, use it for sorting
-        if 'exon_number' in sorted_group.columns and not sorted_group['exon_number'].isna().all():
-            sorted_group = group.sort_values('exon_number')
-
-        # Extract exon lengths in order
-        exon_lengths = sorted_group['exon_length'].tolist()
-
-        # Calculate intron lengths if requested and there are multiple exons
-        intron_lengths = []
-        if include_introns and len(sorted_group) > 1:
-            # Get the sorted starts and ends
-            starts = sorted_group['Start'].tolist()
-            ends = sorted_group['End'].tolist()
-
-            # Calculate intron lengths (gap between consecutive exons)
-            for i in range(len(ends) - 1):
-                # Intron is the gap between end of exon i and start of exon i+1
-                intron_length = starts[i + 1] - ends[i] - 1
-                intron_lengths.append(intron_length)
-
-        # Create structure strings
-        exon_structure_string = ','.join(map(str, exon_lengths))
-        intron_structure_string = ','.join(map(str, intron_lengths)) if intron_lengths else ''
-
-        # Calculate total lengths
-        total_exon_length = sum(exon_lengths)
-        total_intron_length = sum(intron_lengths) if intron_lengths else 0
-
-        # Get additional info if available
-        gene_id = group['gene_id'].iloc[0] if 'gene_id' in group.columns else None
-        chromosome = group['Chromosome'].iloc[0] if 'Chromosome' in group.columns else None
-        strand = group['Strand'].iloc[0] if 'Strand' in group.columns else None
-
-        result_dict = {
-            'transcript_id': transcript_id,
-            'exon_structure': exon_structure_string,
-            'exon_lengths': exon_lengths,
-            'transcript_length': total_exon_length,
-            'n_exons': len(exon_lengths),
-            'gene_id': gene_id,
-            'chromosome': chromosome,
-            'strand': strand
-        }
-
-        # Add intron information if calculated
-        if include_introns:
-            result_dict.update({
-                'intron_structure': intron_structure_string,
-                'intron_lengths': intron_lengths,
-                'total_intron_length': total_intron_length,
-                'n_introns': len(intron_lengths)
-            })
-
-        results.append(result_dict)
-
-    structure_df = pd.DataFrame(results)
-
-    if verbose:
-        print(f"Processed {len(structure_df)} transcripts")
-        print("Exon count distribution:")
-        print(structure_df['n_exons'].value_counts().sort_index().head(10))
-
-        if include_introns:
-            multi_exon = structure_df[structure_df['n_exons'] > 1]
-            if len(multi_exon) > 0:
-                print(f"Calculated introns for {len(multi_exon)} multi-exon transcripts")
-                print("Intron count distribution:")
-                print(multi_exon['n_introns'].value_counts().sort_index().head(10))
-
-    return structure_df
+    return add_exon_structure(
+        adata=adata,
+        gtf_file=gtf_file,
+        include_introns=include_introns,
+        inplace=inplace,
+        verbose=verbose
+    )
 
 
-def _add_structure_to_adata_var(
-    adata: ad.AnnData,
-    structure_df: pd.DataFrame,
-    include_introns: bool = True,
-    verbose: bool = True
-) -> None:
-    """
-    Add structure information (exons and introns) to AnnData.var.
-
-    Parameters
-    ----------
-    adata : AnnData
-        AnnData object to modify
-    structure_df : pd.DataFrame
-        DataFrame containing structure information
-    include_introns : bool, default=True
-        Whether to include intron structure information
-    verbose : bool
-        Whether to print progress information
-    """
-
-    # Set transcript_id as index for easier mapping
-    structure_df = structure_df.set_index('transcript_id')
-
-    # Initialize new columns with default values
-    n_transcripts = adata.n_vars
-
-    # Exon columns
-    adata.var['exon_structure'] = pd.Series([''] * n_transcripts, index=adata.var_names, dtype='object')
-    adata.var['transcript_length'] = pd.Series([np.nan] * n_transcripts, index=adata.var_names, dtype='float64')
-    adata.var['n_exons'] = pd.Series([np.nan] * n_transcripts, index=adata.var_names, dtype='Int64')
-
-    # Intron columns
-    if include_introns:
-        adata.var['intron_structure'] = pd.Series([''] * n_transcripts, index=adata.var_names, dtype='object')
-        adata.var['total_intron_length'] = pd.Series([np.nan] * n_transcripts, index=adata.var_names, dtype='float64')
-        adata.var['n_introns'] = pd.Series([np.nan] * n_transcripts, index=adata.var_names, dtype='Int64')
-
-    # Add optional columns if they exist in structure_df
-    if 'chromosome' in structure_df.columns:
-        adata.var['chromosome'] = pd.Series([''] * n_transcripts, index=adata.var_names, dtype='object')
-
-    if 'strand' in structure_df.columns:
-        adata.var['strand'] = pd.Series([''] * n_transcripts, index=adata.var_names, dtype='object')
-
-    if 'gene_id' in structure_df.columns:
-        adata.var['gene_id_gtf'] = pd.Series([''] * n_transcripts, index=adata.var_names, dtype='object')
-
-    # Map structure information to AnnData transcripts
-    matched_transcripts = 0
-
-    for transcript_id in adata.var_names:
-        if transcript_id in structure_df.index:
-            row = structure_df.loc[transcript_id]
-
-            # Exon information
-            adata.var.loc[transcript_id, 'exon_structure'] = row['exon_structure']
-            adata.var.loc[transcript_id, 'transcript_length'] = row['transcript_length']
-            adata.var.loc[transcript_id, 'n_exons'] = row['n_exons']
-
-            # Intron information
-            if include_introns:
-                adata.var.loc[transcript_id, 'intron_structure'] = row['intron_structure']
-                adata.var.loc[transcript_id, 'total_intron_length'] = row['total_intron_length']
-                adata.var.loc[transcript_id, 'n_introns'] = row['n_introns']
-
-            # Add optional columns
-            if 'chromosome' in structure_df.columns and not pd.isna(row['chromosome']):
-                adata.var.loc[transcript_id, 'chromosome'] = row['chromosome']
-
-            if 'strand' in structure_df.columns and not pd.isna(row['strand']):
-                adata.var.loc[transcript_id, 'strand'] = row['strand']
-
-            if 'gene_id' in structure_df.columns and not pd.isna(row['gene_id']):
-                adata.var.loc[transcript_id, 'gene_id_gtf'] = row['gene_id']
-
-            matched_transcripts += 1
-
-    # Store detailed information in uns for more complex analysis
-    exon_lengths_dict = {}
-    intron_lengths_dict = {}
-
-    for transcript_id in adata.var_names:
-        if transcript_id in structure_df.index:
-            exon_lengths_dict[transcript_id] = structure_df.loc[transcript_id, 'exon_lengths']
-            if include_introns:
-                intron_lengths_dict[transcript_id] = structure_df.loc[transcript_id, 'intron_lengths']
-        else:
-            exon_lengths_dict[transcript_id] = []
-            if include_introns:
-                intron_lengths_dict[transcript_id] = []
-
-    # Store in uns
-    adata.uns['exon_lengths'] = exon_lengths_dict
-    if include_introns:
-        adata.uns['intron_lengths'] = intron_lengths_dict
-
-    if verbose:
-        print(f"Matched structure information for {matched_transcripts}/{len(adata.var_names)} transcripts")
-        if matched_transcripts < len(adata.var_names):
-            print(f"Warning: {len(adata.var_names) - matched_transcripts} transcripts had no structure information")
 
 
 def calculate_structure_similarity(
@@ -428,40 +438,3 @@ def calculate_combined_structure_similarity(
 
     return combined_sim
 
-
-# Convenience function for common use case
-def add_structure_from_gtf(
-    adata: ad.AnnData,
-    gtf_file: str,
-    include_introns: bool = True,
-    inplace: bool = True,
-    verbose: bool = True
-) -> Optional[ad.AnnData]:
-    """
-    Convenience function to add exon and intron structure from GTF file.
-
-    Parameters
-    ----------
-    adata : AnnData
-        AnnData object containing transcript data
-    gtf_file : str
-        Path to GTF/GFF file
-    include_introns : bool, default=True
-        Whether to calculate and include intron structures
-    inplace : bool, default=True
-        If True, modify the AnnData object in place
-    verbose : bool, default=True
-        Whether to print progress information
-
-    Returns
-    -------
-    AnnData or None
-        Modified AnnData object if inplace=False, otherwise None
-    """
-    return add_exon_structure(
-        adata=adata,
-        gtf_file=gtf_file,
-        include_introns=include_introns,
-        inplace=inplace,
-        verbose=verbose
-    )

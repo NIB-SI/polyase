@@ -205,7 +205,7 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
                 'Synt_id': synt_id,
                 'allele': allele_num,
                 'functional_annotation': functional_annotation,
-                'transcript_id': transcript_id,
+                'gene_id': gene_id,
                 'p_value': p_value,
                 'ratio_difference': ratio_difference,
                 'n_alleles': len(allele_indices),
@@ -236,12 +236,12 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
 
         # Map FDR values back to the individual alleles
         # Group by transcript_id and take the first FDR value (they should be the same for all replicates)
-        fdr_map = results_df.groupby('transcript_id')['FDR'].first().to_dict()
+        fdr_map = results_df.groupby('gene_id')['FDR'].first().to_dict()
 
         # Update the FDR array
-        for i, transcript_id in enumerate(transcript_ids):
-            if transcript_id in fdr_map:
-                fdr_pvals[i] = fdr_map[transcript_id]
+        for i, gene_id in enumerate(gene_ids):
+            if gene_id in fdr_map:
+                fdr_pvals[i] = fdr_map[gene_id]
 
     # Store results in the AnnData object
     adata.uns['allelic_ratio_test'] = results_df
@@ -501,13 +501,13 @@ def test_allelic_ratios_between_conditions(adata, layer="unique_counts", group_k
         results_df = results_df.sort_values('p_value')
 
         # Map FDR values back to the individual alleles
-        # Group by transcript_id and take the first FDR value (they should be the same for all replicates)
-        fdr_map = results_df.groupby('transcript_id')['FDR'].first().to_dict()
+        # Group by gene_id and take the first FDR value (they should be the same for all replicates)
+        fdr_map = results_df.groupby('gene_id')['FDR'].first().to_dict()
 
         # Update the FDR array
-        for i, transcript_id in enumerate(transcript_ids):
-            if transcript_id in fdr_map:
-                fdr_pvals[i] = fdr_map[transcript_id]
+        for i, gene_id in enumerate(gene_ids):
+            if gene_id in fdr_map:
+                fdr_pvals[i] = fdr_map[gene_id]
 
     # Store results in the AnnData object
     adata.uns['allelic_ratio_test'] = results_df
@@ -632,6 +632,12 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
     # Check if gene_id_key exists in var
     if gene_id_key not in adata.var:
         raise ValueError(f"Gene ID key '{gene_id_key}' not found in adata.var")
+
+    if "functional_annotation" in adata.var:
+        functional_annotations = adata.var["functional_annotation"]
+    else:
+        functional_annotations = "Missing annotation"
+        print("No functional annotations found in adata.var, skipping functional annotation processing.")
 
     # Work on a copy if not inplace
     if not inplace:
@@ -791,6 +797,7 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
 
             # Get transcript ID
             transcript_id = transcript_ids[isoform_pos]
+            functional_annotation = functional_annotations.iloc[isoform_pos]
 
             # Store p-value in the arrays we created
             pvals[isoform_pos] = p_value
@@ -800,9 +807,10 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
 
             # Store results
             results.append({
-                'gene_id': gene_id,
-                'isoform_number': isoform_idx + 1,
                 'transcript_id': transcript_id,
+                'isoform_number': isoform_idx + 1,
+                'gene_id': gene_id,
+                'functional_annotation': functional_annotation,
                 'p_value': p_value,
                 'ratio_difference': ratio_difference,
                 'n_isoforms': len(isoform_indices),
@@ -828,6 +836,7 @@ def test_isoform_DIU_between_conditions(adata, layer="unique_counts", group_key=
                     plotting_results.append({
                         'gene_id': gene_id,
                         'transcript_id': transcript_id,
+                        'functional_annotation': functional_annotation,
                         'isoform_number': isoform_idx + 1,
                         'condition': condition,
                         'replicate': rep_idx + 1,
@@ -940,6 +949,12 @@ def test_differential_isoform_structure(
         print("Warning: use_introns=True but 'intron_lengths' not found. Using only exon structures")
         use_introns = False
     
+    if "functional_annotation" in adata.var:
+        functional_annotations = adata.var["functional_annotation"]
+    else:
+        functional_annotations = "Missing annotation"
+        print("No functional annotations found in adata.var, skipping functional annotation processing.")
+    
     if not inplace:
         adata = adata.copy()
     
@@ -1008,7 +1023,8 @@ def test_differential_isoform_structure(
         
         synt_haplotypes = haplotypes.iloc[synt_indices]
         unique_haplotypes = synt_haplotypes.dropna().unique()
-        
+        functional_annotation = functional_annotations.iloc[synt_indices].iloc[0]
+        print(functional_annotation)
         if len(unique_haplotypes) < 2:
             stats['fail_reasons']['single_haplotype'] += 1
             stats['failed'] += 1
@@ -1228,6 +1244,7 @@ def test_differential_isoform_structure(
                         plotting_data.append({
                             'Synt_id': synt_id,
                             'gene_id': gene_id,
+                            'functional_annotation': functional_annotation,
                             'haplotype': hap,
                             'sample': samp_name,
                             'condition': cond,

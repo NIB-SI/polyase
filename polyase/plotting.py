@@ -380,14 +380,11 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
         synt_data_exploded = pd.DataFrame(exploded_rows)
 
         # Reshape data for seaborn
-        id_vars = ['Synt_id', 'allele', 'transcript_id']
+        id_vars = ['Synt_id', 'allele', 'gene_id']
         if 'FDR' in synt_data.columns:
             id_vars.append('FDR')
-        if 'gene_id' in synt_data.columns:
-            id_vars.append('gene_id')
         if 'functional_annotation' in synt_data.columns:
             id_vars.append('functional_annotation')
-
         synt_data_melted = pd.melt(
             synt_data_exploded,
             id_vars=id_vars,
@@ -438,7 +435,7 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
                     )
 
         # Determine title components
-        fdr_text = f", FDR={fdr:.2e}" if not np.isnan(fdr) else ""
+        fdr_text = f"FDR={fdr:.2e}" if not np.isnan(fdr) else ""
 
         # Determine if this syntelog has a significant difference
         is_significant = False
@@ -453,13 +450,24 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
         function_annotation_text = "NA"
         if 'functional_annotation' in synt_data_melted.columns:
             function_annotation = synt_data_melted['functional_annotation'].iloc[0]
+        
             if function_annotation is not None:
-                function_annotation_text = str(function_annotation)[:20]  # Shorten long descriptions
+                function_annotation = function_annotation.split('/')
+                function_annotation = list(dict.fromkeys(function_annotation))
+                function_annotation= ' '.join(function_annotation)
+                # Split the string directly since it's a scalar, not a Series
+                words = function_annotation.split(' ')
+                function_annotation_text = ' '.join(words[:4])  # First 4 words
+                
+                # Add line break if annotation is too long
+                if len(words) > 4:
+                    function_annotation_text_2 = ' '.join(words[4:8])  # Remaining words
+                    function_annotation_text = f"{function_annotation_text}\n{function_annotation_text_2}"
 
-        transcript_id = synt_data_melted['transcript_id'].iloc[0]
-
+        gene_id = synt_data_melted['gene_id'].iloc[0]
         # Set title with stats and color based on significance
-        ax.set_title(f"{transcript_id}\n{function_annotation_text}{fdr_text}", color=title_color)
+        ax.set_title(f"{gene_id}\n{function_annotation_text}\n{fdr_text}", color=title_color)       
+
         ax.set_xlabel('Allele')
         ax.set_ylabel(y_label)
 
@@ -1003,6 +1011,8 @@ def plot_isoform_diu_results(
 
 
 
+
+
 def plot_differential_isoform_usage(
     results_df,
     annotation_df,
@@ -1024,6 +1034,7 @@ def plot_differential_isoform_usage(
         DataFrame containing differential isoform usage results with columns:
         - gene_id: Gene identifier
         - transcript_id: Transcript identifier
+        - functional_annotation: Functional annotation (optional)
         - sample_name: Sample name
         - {layer}_cpm: CPM normalized counts for the specified layer
         - isoform_ratio: Isoform usage ratio
@@ -1033,10 +1044,6 @@ def plot_differential_isoform_usage(
     annotation_df : polars.DataFrame
         Polars DataFrame containing GTF annotation with:
         - gene_id: Gene identifier
-        - functional_annotation: Gene annotation text (optional)
-        Plus standard GTF columns for RNApysoforms with columns:
-        - gene_id: Gene identifier
-        - functional_annotation: Gene annotation text (optional)
         Plus standard GTF columns for RNApysoforms
     fdr_threshold : float, default=0.05
         FDR threshold for identifying significant genes (applied at gene level)
@@ -1137,12 +1144,10 @@ def plot_differential_isoform_usage(
         annotation_txt = ""
         try:
             # Check if functional_annotation column exists
-            if "functional_annotation" in annotation_df.columns:
-                filtered_annotation = annotation_df.filter(pl.col("gene_id") == gene)
+            if "functional_annotation" in filtered_df.columns:
+                filtered_annotation = filtered_df[filtered_df["gene_id"] == gene]["functional_annotation"]
                 if len(filtered_annotation) > 0:
-                    annotation_txt = filtered_annotation.head(1)["functional_annotation"][0].split('/')
-                    annotation_txt = list(dict.fromkeys(annotation_txt))
-                    annotation_txt = ' '.join(annotation_txt)
+                    annotation_txt = filtered_annotation.iloc()[0]                    
                 else:
                     print(f"Warning: No annotation found for gene {gene}")
             else:
@@ -1218,6 +1223,7 @@ def plot_differential_isoform_usage(
 
     print(f"Generated {len(figures)} plots for differential isoform usage")
     return figures
+
 
 def plot_allele_specific_isoform_structure(
     results_df,
@@ -1366,12 +1372,10 @@ def plot_allele_specific_isoform_structure(
         annotation_txt = ""
         try:
             # Check if functional_annotation column exists
-            if "functional_annotation" in annotation_df.columns:
-                filtered_annotation = annotation_df.filter(pl.col("gene_id") == gene)
+            if "functional_annotation" in filtered_df.columns:
+                filtered_annotation = filtered_df[filtered_df["gene_id"] == gene]["functional_annotation"]
                 if len(filtered_annotation) > 0:
-                    annotation_txt = filtered_annotation.head(1)["functional_annotation"][0].split('/')
-                    annotation_txt = list(dict.fromkeys(annotation_txt))
-                    annotation_txt = ' '.join(annotation_txt)
+                    annotation_txt = filtered_annotation.iloc()[0]                    
                 else:
                     print(f"Warning: No annotation found for gene {gene}")
             else:

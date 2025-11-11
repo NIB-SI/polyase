@@ -5,4 +5,4 @@ Allelic gene and isoform expression analysis in potato
    :maxdepth: 2
    :caption: Potato Tutorial:
 
-   potato_polyase_1
+   potato_polyase
