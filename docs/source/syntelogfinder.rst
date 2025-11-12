@@ -19,6 +19,7 @@ The following packages are not in bioconda/pip so need to be installed manually 
 - McxScan (follow instructions `here <https://github.com/wyp1125/MCScanX>`_ and provide path to installation to ``--mcscanx_path``)
 - GENESPACE (`instructions <https://github.com/jtlovell/GENESPACE?tab=readme-ov-file#2-software-installation>`_) (inside the conda environment genespace-env (syntelogfinder/modules/local/genespace/genespace_run/environment.yml))
 
+
 Minimal input
 -------------
 
@@ -71,6 +72,14 @@ or with conda::
                          -profile conda \
                          --mcscanx_path [path to MCScanX installation] \
                          -resume
+
+Test data
+---------
+A test dataset is available for testing and demonstration purposes. This dataset contains a phased genome assembly and annotation for chromosome 1 across all haplotypes of the tetraploid potato cultivar Atlantic.
+
+- `fasta <https://zenodo.org/records/17590760/files/ATL_v3.asm.chr01_all_haplotypes.fa.gz?download=1&preview=1>`_
+- `gtf <https://zenodo.org/records/17590760/files/ATL_unitato_liftoff.chr01_all_haplotypes.gtf.gz?download=1&preview=1>`_
+
 
 Tutorial
 --------

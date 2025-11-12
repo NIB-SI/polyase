@@ -154,17 +154,20 @@ e.g::
 Test Run
 --------
 
-Download from SRA the samples SRR14993893 and SRR14993893.
+A test dataset is available for testing and demonstration purposes. This dataset contains a phased genome assembly and annotation for chromosome 1 across all haplotypes of the tetraploid potato cultivar Atlantic.
 
-``/scratch/nadjafn/reference/Atlantic/unitato2Atl.with_chloroplast_and_mito.no_scaffold.agat.gtf``
+* long-read RNA-seq fastq files:
 
-download gtf file from zenodo: ``unitato2Atl.with_chloroplast_and_mito.no_scaffold.agat.gtf``
+Download from SRA the samples SRR14993893 and SRR14993894.
 
-and fasta::
+* genome and annotation files:
 
-    /scratch/nadjafn/reference/Atlantic/ATL_v3.asm.with_chloroplast_and_mito.fa
+- `fasta <https://zenodo.org/records/17590760/files/ATL_v3.asm.chr01_all_haplotypes.fa.gz?download=1&preview=1>`_
+- `gtf <https://zenodo.org/records/17590760/files/ATL_unitato_liftoff.chr01_all_haplotypes.gtf.gz?download=1&preview=1>`_
 
-1. samples to sample sheet
+First add samples to sample sheet, download the annotation files and then run the pipeline like this:
+
+
 
 .. code-block:: bash
 
