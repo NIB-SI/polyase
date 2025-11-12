@@ -4,7 +4,8 @@ Syntelog Identification in Diploid Rice
 Overview
 --------
 
-This tutorial demonstrates how to run the syntelogsfinder pipeline on a rice dataset. We'll use long-read RNA-seq data from the cultivar Nipponbare to identify syntelogs (homeologous gene pairs) in a diploid genome.
+This tutorial demonstrates how to run the syntelogfinder pipeline on a rice dataset. 
+In additions We'll use long-read RNA-seq data from the cultivar Nipponbare to run longrnaseq pipeline and quantify the allele-specific gene and isofrom expression.
 
 **What you'll learn:**
 
@@ -233,7 +234,7 @@ Download organellar genomes from: https://www.ncbi.nlm.nih.gov/datasets/organell
 
 Append these sequences to your reference fasta and add corresponding annotations to your gtf file.
 
-Step 4.5: Run the Pipeline
+Step 4.5: Run the longrnaseq Pipeline
 ***************************
 
 .. code-block:: bash
@@ -263,8 +264,3 @@ long-rnaseq pipeline issues:
 * BAMBU: gene_ids in the gtf file are essential for BAMBU to work correctly. Ensure that your gtf file contains gene_id attributes for each transcript.
 
 
-
-.. toctree::
-   :maxdepth: 2
-
-   rice_polyase
