@@ -28,6 +28,7 @@ The framework consists of three components:
    :maxdepth: 2
    :caption: Getting Started:
 
+   syntelogfinder
    examples
 
 
