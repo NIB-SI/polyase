@@ -32,7 +32,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest (>=9.0.0,<10.0.0)"
+    "pytest (>=9.0.0,<10.0.0)",
+    "numpy (>=2.3.4,<3.0.0)"
 ]
 docs = [
     "sphinx (>= 4.0.0)",

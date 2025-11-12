@@ -24,16 +24,13 @@ templates_path = ['_templates']
 exclude_patterns = []
 
 
-
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 
-html_js_files = [
-    'https://cdn.plot.ly/plotly-latest.min.js',
-]
+
 
 
 def setup(app):
@@ -41,3 +38,21 @@ def setup(app):
 # Auto-generate API documentation
 
 
+# Configure nbsphinx for RequireJS (critical for Plotly)
+nbsphinx_requirejs_path = ''  # Disable the default RequireJS
+nbsphinx_requirejs_options = {
+    "paths": {
+        "plotly": "https://cdn.plot.ly/plotly-2.27.0.min"
+    }
+}
+
+# Add plotly script (keep this)
+html_js_files = [
+    'https://cdn.plot.ly/plotly-2.27.0.min.js',
+]
+
+# Ensure notebooks are executed with outputs
+nbsphinx_execute = 'never'  # Use 'always' if you want RTD to execute them
+
+# If using sphinx_rtd_theme, you might need this
+html_theme = 'sphinx_rtd_theme'
