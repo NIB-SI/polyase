@@ -56,3 +56,6 @@ nbsphinx_execute = 'never'  # Use 'always' if you want RTD to execute them
 
 # If using sphinx_rtd_theme, you might need this
 html_theme = 'sphinx_rtd_theme'
+
+nbsphinx_execute = 'never'
+
