@@ -6,8 +6,7 @@ polyase package
    :alt: Just keep smiling
 
 
-Introduction
-------------
+
 
 Installation
 -----------
