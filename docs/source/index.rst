@@ -29,7 +29,8 @@ The framework consists of three components:
    :caption: Getting Started:
 
    syntelogfinder
-   examples
+   longrnaseq
+   polyase
 
 
 .. toctree::

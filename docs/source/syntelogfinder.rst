@@ -24,7 +24,7 @@ Minimal input
 
 - parameter file (params.json)
 - genome fasta of phased reference (chromosome names like this: ``>chr[_]01_1``, ``>chr[_]01_2`` Where the _suffix is the haplotype)
-- gff with CDS corresponding to the reference (same chromosome names!)
+- gff/gtf with CDS corresponding to the reference (same chromosome names!)
 
 The gff file should look like this https://agat.readthedocs.io/en/latest/gff_to_gtf.html#the-gff-file-to-convert
 with the following features:
@@ -33,6 +33,19 @@ with the following features:
 - mRNA
 - exon
 - CDS
+
+Or a gtf file with the following features:
+
+- gene
+- mRNA/transcript
+- exon
+- CDS
+
+Mandatory Attributes
+
+- gene_id - must be present on ALL lines
+- transcript_id - required for transcript, exon, CDS features
+- Parent - links child features to parent 
 
 The ``params.json`` should look like this::
 
@@ -49,14 +62,12 @@ Usage
 Run like this (after cloning the repository)::
 
     nextflow run main.nf -params-file params/params.json \
-                         -c conf/nextflow.config \
                          -profile singularity \
                          -resume
 
 or with conda::
 
     nextflow run main.nf -params-file params/params.json \
-                         -c conf/nextflow.config \
                          -profile conda \
                          --mcscanx_path [path to MCScanX installation] \
                          -resume

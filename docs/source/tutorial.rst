@@ -1,21 +1,13 @@
 Syntelog identification in hexaploid wheat
 ==========================================
 
-Running the full syntelogsfinder pipeline on wheat example
-**********************************************************
 
-This is an example of running the whole pipeline on an example.
+This is an example of running the syntelogfinder pipeline on an example.
 We will use a wheat long-read RNA-seq dataset from the cultivar AK58.
 
-Long-read RNA-seq
------------------
-
-The four samples can be found `here <https://www.ncbi.nlm.nih.gov/Traces/study/?acc=SRP576947&o=acc_s%3Aa&s=SRR33004955,SRR33004956,SRR33004957,SRR33004958>`_.
-We have two replicates from stem tissue and two from leaf tissue.
-*Note*: We analyzed these samples, but the metadata we found is not very clear, and there are just two replicates per tissue, so please do not consider this as a full analysis.
 
 Phased reference genome and annotation
---------------------------------------
+**********************************************************
 
 * **fasta**: https://download.cncb.ac.cn/gwh/Plants/Triticum_aestivum_1_GWHANRF00000000/GWHANRF00000000.genome.fasta.gz
 * **gff**: https://download.cncb.ac.cn/gwh/Plants/Triticum_aestivum_1_GWHANRF00000000/GWHANRF00000000.gff.gz
@@ -59,7 +51,7 @@ The main output we are interested in is the ``syntelogfinder/output_wheat/03_GEN
 * ``GWHANRF00000000.renamed_genespace.pie_chart.svg``
 
 .. figure:: /_static/images/tutorial/GWHANRF00000000.renamed_genespace_pie_chart.svg
-   :width: 100%
+   :width: 50%
    :align: center
    :alt: Syntelog categories pie chart
 
