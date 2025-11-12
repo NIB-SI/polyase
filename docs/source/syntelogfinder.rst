@@ -6,8 +6,7 @@ syntelogfinder
 
 Nextflow pipeline to group genes on polyploid phased assemblies that are orthologous and syntelogous based on GENESPACE results.
 
-Getting started
-===============
+
 
 Requirements
 ------------
@@ -69,10 +68,10 @@ Tutorial
 - `Running syntelogfinder on phased reference of hexaploid wheat <https://polyase.readthedocs.io/en/latest/tutorial.html>`_
 
 Output
-======
+--------
 
 Sample Output
--------------
+~~~~~~~~~~~~~~
 
 The pipeline generates a tab-separated file with the following columns:
 
@@ -121,12 +120,28 @@ Key Features
 - All syntenic gene members are listed in the ``syntenic_genes`` column
 
 Plots
------
+~~~~~~~~~~
 
-.. image:: example_output/03_GENESPACE/De_v1.unitato_liftoff_haplotap_genespace_pie_chart.svg
-   :alt: Example pie chart
+**1. Pie Chart** (``Genespace_pie_chart.svg``)
+
+Shows the distribution of syntelog categories.
+
+.. figure:: /_static/images/tutorial/Hap1_2_Nipponbare.genome.renamed_genespace_pie_chart.svg
+   :width: 70%
+   :align: center
+   :alt: Syntelog categories pie chart
+
+**2. Combined Bar Plots** (``Genespace_combined_barplots.svg``)
+
+Displays detailed statistics for each syntelog category. Exon lengths should be very similar between gene pairs since we used lifted annotations.
+
+.. figure:: /_static/images/tutorial/Hap1_2_Nipponbare.genome.renamed_genespace_combined_barplots.svg
+   :width: 100%
+   :align: center
+   :alt: Syntelog categories combined bar plots
 
 Troubleshooting
-===============
+----------------
+
 
 - If GENESPACE process is interrupted, running with ``-resume`` flag will fail. To cache the other processes, delete the genespace work dir before resuming
