@@ -80,6 +80,15 @@ A test dataset is available for testing and demonstration purposes. This dataset
 - `fasta <https://zenodo.org/records/17590760/files/ATL_v3.asm.chr01_all_haplotypes.fa.gz?download=1&preview=1>`_
 - `gtf <https://zenodo.org/records/17590760/files/ATL_unitato_liftoff.chr01_all_haplotypes.gtf.gz?download=1&preview=1>`_
 
+The ``params.json`` should look like this::
+
+    {
+        "reference_fasta": "ATL_v3.asm.chr01_all_haplotypes.fa",
+        "reference_gff": "ATL_unitato_liftoff.chr01_all_haplotypes.gtf",
+        "ploidy": 4,
+        "outdir": "output_path"
+    }
+
 
 Tutorial
 --------
