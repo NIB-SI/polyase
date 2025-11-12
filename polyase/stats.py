@@ -1024,7 +1024,7 @@ def test_differential_isoform_structure(
         synt_haplotypes = haplotypes.iloc[synt_indices]
         unique_haplotypes = synt_haplotypes.dropna().unique()
         functional_annotation = functional_annotations.iloc[synt_indices].iloc[0]
-        print(functional_annotation)
+
         if len(unique_haplotypes) < 2:
             stats['fail_reasons']['single_haplotype'] += 1
             stats['failed'] += 1
@@ -1033,7 +1033,7 @@ def test_differential_isoform_structure(
         if synt_idx < 3:
             print(f"\nDEBUG Syntelog {synt_id}: {len(unique_haplotypes)} haplotypes, {len(synt_indices)} transcripts")
         
-        # IMPROVED: Identify ALL isoforms in reference haplotype, not just major/minor
+      
         reference_haplotype, major_isoform, minor_isoform, all_ref_isoforms = _identify_all_reference_isoforms(
             synt_indices, haplotypes, transcript_ids,
             exon_lengths_dict, intron_lengths_dict,
