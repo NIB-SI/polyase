@@ -1,7 +1,7 @@
 longrnaseq
 ==========
 
-.. image:: assets/pipeline_2.png
+.. image:: /_static/images/longrnaseq.png
    :alt: Just keep smiling
 
 Introduction

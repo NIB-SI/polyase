@@ -257,8 +257,8 @@ def test_allelic_ratios_within_conditions(adata, layer="unique_counts", test_con
             'ratio_difference': 'max'
         })
         # Print summary
-        significant_results = grouped_results[(grouped_results['FDR'] < 0.005) & (grouped_results['ratio_difference'] > 0.1)]
-        print(f"Found {len(significant_results)} from {len(grouped_results)} syntelogs with at least one significantly different allele (FDR < 0.005 and ratio difference > 0.1)")
+        significant_results = grouped_results[(grouped_results['FDR'] < 0.05) & (grouped_results['ratio_difference'] > 0.1)]
+        print(f"Found {len(significant_results)} from {len(grouped_results)} syntelogs with at least one significantly different allele (FDR < 0.05 and ratio difference > 0.1)")
 
     # Return AnnData object if not inplace
     if not inplace:

@@ -207,7 +207,7 @@ def plot_allelic_ratios(
 
 def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=None, jitter=0.2, alpha=0.7,
                                    ylim=None, sort_by='p_value', output_file=None, sig_threshold=0.05,
-                                   difference_threshold=0.05, sig_color='red', plot_type='ratios'):
+                                   difference_threshold=0.1, sig_color='red', plot_type='ratios'):
     """
     Plot the top n syntelogs with differential allelic ratios or CPM values in a grid layout (6 plots per row).
     Syntelogs with significant differences will have their titles highlighted in red.
@@ -235,7 +235,7 @@ def plot_top_differential_syntelogs(results_df, n=5, figsize=(16, 12), palette=N
     sig_threshold : float, optional
         Significance threshold for p-value or FDR (default: 0.05)
     difference_threshold : float, optional
-        Ratio difference threshold for significance (default: 0.05)
+        Ratio difference threshold for significance (default: 0.1)
     sig_color : str, optional
         Color for titles of syntelogs with significant differences (default: 'red')
     plot_type : str, optional

@@ -1,4 +1,4 @@
-.. image:: assets/sytelogfinder_diagramm.png
+.. image:: /_static/images/syntelogfinder.png
    :alt: smile
 
 syntelogfinder
