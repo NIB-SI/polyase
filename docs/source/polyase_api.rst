@@ -30,13 +30,6 @@ polyase.filter module
    :show-inheritance:
    :undoc-members:
 
-polyase.io module
------------------
-
-.. automodule:: polyase.io
-   :members:
-   :show-inheritance:
-   :undoc-members:
 
 polyase.multimapping module
 ---------------------------
