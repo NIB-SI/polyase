@@ -44,7 +44,7 @@ Usage
 
 ``samplesheet.csv``:
 
-.. code-block:: csv
+.. code-block:: text
 
     sample,fastq_1
     SAMPLE1,sample1.fastq.gz
@@ -110,7 +110,9 @@ Pipeline output
 
 The main output is a MultiQC.html and oarfish transcript and gene counts.
 
-An example MultiQC report can be found here: `example MultiQC report <https://github.com/nadjano/longrnaseq/blob/master/example_output/multiqc_report.html>`_
+An example MultiQC report can be found  `here <_static/multiqc_report.html>`_
+
+
 
 Tutorial
 --------

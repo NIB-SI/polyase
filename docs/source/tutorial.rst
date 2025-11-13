@@ -78,7 +78,7 @@ longrnaseq
 ***************
 
 Prepare the ``assets/sample.csv`` file:
-.. code-block:: csv
+.. code-block:: text
     sample,fastq_1
     SRR33004955,fastq/SRR33004955.fastq
     SRR33004956,fastq/SRR33004956.fastq
