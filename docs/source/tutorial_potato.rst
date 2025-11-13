@@ -1,5 +1,5 @@
-Polyase
-========
+Polyase tutorial
+================
 Allelic gene and isoform expression analysis in potato
 ----------------------------------------------------------------
 
