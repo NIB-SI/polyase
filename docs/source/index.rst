@@ -39,7 +39,7 @@ The framework consists of three components:
 
    syntelogfinder_tutorial
    longrnaseq_tutorial
-   potato_tutorial
+   tutorial_potato
 
 .. toctree::
    :maxdepth: 2
