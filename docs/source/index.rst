@@ -4,16 +4,18 @@
    contain the root `toctree` directive.
 
 Welcome to polyase documentation
-=====================
-
-.. figure:: /_static/images/intro/Fig1_pipelines.png
-   :width: 100%
-   :align: center
-   :alt: Flowchart of the polyase framework
+======================================
 
 This is the documentation for polyase, a framework for allele-specific expression analysis using long-read RNA-seq and phased genome assemblies.
 
 The framework consists of three components:
+
+.. figure:: /_static/images/intro/Fig1_pipelines.png
+   :width: 70%
+   :align: center
+   :alt: Flowchart of the polyase framework
+
+
 
 1) `syntelogfinder <https://github.com/NIB-SI/syntelogfinder>`_: a nextflow pipeline to identify syntenic genes in phased genome assemblies using GENESPACE.
    Input: phased genome assembly and their annotations in GFF3 format.
