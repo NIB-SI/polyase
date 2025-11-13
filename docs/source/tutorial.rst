@@ -73,6 +73,7 @@ We can see here that the exon lengths are very different between the genes in th
 
 So to avoid any bias in read mapping to the longest haplotype (if on the other haplotypes the transcript is too short) we will modify the gff3 file to "chop" the UTRs off that more transcripts have the same length.
 
+.. _longrnaseq-section:
 
 longrnaseq
 ***************

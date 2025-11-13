@@ -37,9 +37,9 @@ The framework consists of three components:
    :maxdepth: 2
    :caption: Tutorial:
 
-   tutorial
-   tutorial_rice
-   tutorial_potato
+   syntelogfinder_tutorial
+   longrnaseq_tutorial
+   potato_tutorial
 
 .. toctree::
    :maxdepth: 2
