@@ -234,7 +234,7 @@ Download organellar genomes from: https://www.ncbi.nlm.nih.gov/datasets/organell
 
 Append these sequences to your reference fasta and add corresponding annotations to your gtf file.
 
-.. _longrnaseq-section:
+.. _rice-longrnaseq-section:
 
 Step 4.5: Run the longrnaseq Pipeline
 ***************************

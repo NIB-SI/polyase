@@ -1,9 +1,9 @@
 Longrnaseq tutorial
-=========================
+===================
 
-.. toctree::
-   :maxdepth: 2
-   :caption: longrnaseq tutorial:
+This tutorial covers the longrnaseq pipeline.
 
-   tutorial#longrnaseq-section
-   tutorial_rice#longrnaseq-section
+See the following sections:
+
+- :ref:`longrnaseq-section`
+- :ref:`rice-longrnaseq-section`

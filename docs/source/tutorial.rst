@@ -6,7 +6,7 @@ This is an example of running the syntelogfinder pipeline on an example.
 We will use a wheat long-read RNA-seq dataset from the cultivar AK58.
 
 
-Phased reference genome and annotation
+Part 1: Preparing the Phased Reference Genome
 **********************************************************
 
 * **fasta**: https://download.cncb.ac.cn/gwh/Plants/Triticum_aestivum_1_GWHANRF00000000/GWHANRF00000000.genome.fasta.gz
@@ -20,8 +20,8 @@ The chromosome names are not so nice, so we will rename them:
 
 Now we are ready to run the syntelog finder pipeline.
 
-Syntelog finder
-***************
+Part 2: Running the Syntelog Finder Pipeline
+**********************************************************
 
 1. Install nextflow and conda
 2. Prepare the params.config file
@@ -75,8 +75,8 @@ So to avoid any bias in read mapping to the longest haplotype (if on the other h
 
 .. _longrnaseq-section:
 
-longrnaseq
-***************
+Part 3: Long-Read RNA-Seq Analysis
+**********************************************************
 
 Prepare the ``assets/sample.csv`` file:
 .. code-block:: text
