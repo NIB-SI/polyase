@@ -131,12 +131,9 @@ A test dataset is available for testing and demonstration purposes. This dataset
 
 * long-read RNA-seq fastq files:
 
-Download from SRA the samples SRR14993893 and SRR14993894.
+Download from SRA the samples: SRR14993893 and SRR14993894.
 
-* genome and annotation files:
-
-- `fasta <https://zenodo.org/records/17590760/files/ATL_v3.asm.chr01_all_haplotypes.fa.gz?download=1&preview=1>`_
-- `gtf <https://zenodo.org/records/17590760/files/ATL_unitato_liftoff.chr01_all_haplotypes.gtf.gz?download=1&preview=1>`_
+* genome and annotation files: `fasta <https://zenodo.org/records/17590760/files/ATL_v3.asm.chr01_all_haplotypes.fa.gz?download=1&preview=1>`_, `gtf <https://zenodo.org/records/17590760/files/ATL_unitato_liftoff.chr01_all_haplotypes.gtf.gz?download=1&preview=1>`_
 
 First add samples to sample sheet, download the annotation files and then run the pipeline like this:
 
