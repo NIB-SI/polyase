@@ -3,10 +3,10 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to polyase documentation
+Welcome to LongPolyASE documentation
 ======================================
 
-This is the documentation for polyase, a framework for allele-specific expression analysis using long-read RNA-seq and phased genome assemblies.
+This is the documentation for LongPolyASE, a framework for allele-specific expression analysis using long-read RNA-seq and phased genome assemblies.
 
 The framework consists of three components:
 
